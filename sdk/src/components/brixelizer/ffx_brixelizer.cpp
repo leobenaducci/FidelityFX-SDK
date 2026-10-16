@@ -77,7 +77,18 @@ typedef struct FfxBrixelizerInvalidation {
 typedef struct FfxBrixelizerInstance {
     FfxBrixelizerInstanceID id;
     FfxBrixelizerAABB       aabb;
+    // vkfw patch: the logical cascade band, inclusive, resolved and clamped once at creation so the
+    // job loops never have to look at the flag again. Without a band this is the whole context,
+    // which is what every instance used to get.
+    uint32_t                minCascade;
+    uint32_t                maxCascade;
 } FfxBrixelizerInstance;
+
+// vkfw patch: whether an instance is submitted to this logical cascade at all.
+static bool instanceInCascade(const FfxBrixelizerInstance *instance, uint32_t cascadeIndex)
+{
+    return cascadeIndex >= instance->minCascade && cascadeIndex <= instance->maxCascade;
+}
 
 typedef struct FfxBrixelizerScratchSpace {
     union {
@@ -239,7 +250,8 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         // Create instance jobs
         ifor (context->numStaticInstances) {
             FfxBrixelizerInstance *instance = &context->instances[i];
-            if (aabbsOverlap(instance->aabb, casacadeAABB)) {
+            // vkfw patch: cascadeIndex is the logical cascade, which is the granularity the band names.
+            if (instanceInCascade(instance, cascadeIndex) && aabbsOverlap(instance->aabb, casacadeAABB)) {
                 FfxBrixelizerRawJobDescription job = {};
                 ifor (3) {
                     job.aabbMin[i] = instance->aabb.min[i];
@@ -284,14 +296,20 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         FfxBrixelizerRawJobDescription *job = outDesc->dynamicJobs;
 
         // Create instance jobs
-        outDesc->numDynamicJobs = FFX_ARRAY_ELEMENTS(context->instances) - context->dynamicInstanceStartIndex;
+        // vkfw patch: counted as they are emitted rather than assumed to be every dynamic instance,
+        // because a band (FFX_BRIXELIZER_INSTANCE_FLAG_CASCADE_RANGE) can exclude this cascade.
+        outDesc->numDynamicJobs = 0;
         for (uint32_t i = context->dynamicInstanceStartIndex; i < FFX_ARRAY_ELEMENTS(context->instances); ++i) {
+            if (!instanceInCascade(&context->instances[i], cascadeIndex)) {
+                continue;
+            }
             jfor (3) {
                 job->aabbMin[j] = context->instances[i].aabb.min[j];
                 job->aabbMax[j] = context->instances[i].aabb.max[j];
             }
             job->instanceIdx = context->instances[i].id;
             ++job;
+            ++outDesc->numDynamicJobs;
         }
     }
 
@@ -494,13 +512,46 @@ FfxErrorCode ffxBrixelizerUnregisterBuffers(FfxBrixelizerContext* uncastContext,
     return ffxBrixelizerRawContextUnregisterBuffers(&context->context, indices, numIndices);
 }
 
-static void addInvalidationJob(FfxBrixelizerContext_Private* context, FfxBrixelizerAABB aabb)
+// vkfw patch: resolve a description's cascade band against this context, clamped into range.
+static void resolveCascadeRange(const FfxBrixelizerContext_Private *context,
+                                const FfxBrixelizerInstanceDescription *desc,
+                                uint32_t *outMinCascade,
+                                uint32_t *outMaxCascade)
+{
+    uint32_t minCascade = 0;
+    uint32_t maxCascade = context->numCascades - 1;
+
+    if (desc->flags & FFX_BRIXELIZER_INSTANCE_FLAG_CASCADE_RANGE) {
+        minCascade = desc->minCascade;
+        maxCascade = desc->maxCascade;
+
+        // An inverted or out-of-range band would drop the instance from the SDF everywhere, which is
+        // a far quieter failure than it deserves -- the geometry simply would not be there, with
+        // nothing logged. Clamp into the context, and say so in a debug build.
+        FFX_ASSERT(minCascade <= maxCascade);
+        FFX_ASSERT(maxCascade < context->numCascades);
+        if (maxCascade >= context->numCascades) {
+            maxCascade = context->numCascades - 1;
+        }
+        if (minCascade > maxCascade) {
+            minCascade = maxCascade;
+        }
+    }
+
+    *outMinCascade = minCascade;
+    *outMaxCascade = maxCascade;
+}
+
+static void addInvalidationJob(FfxBrixelizerContext_Private* context, FfxBrixelizerAABB aabb, uint32_t minCascade, uint32_t maxCascade)
 {
     FfxBrixelizerInvalidation invalidation = {};
 
     uint32_t cascadesMask = 0;
     ifor (context->numCascades) {
-        if (context->cascades[i].flags & FFX_BRIXELIZER_CASCADE_STATIC) {
+        // vkfw patch: only the cascades this instance's band reaches. An invalidation outside it
+        // clears bricks the instance never put anything into, and each one costs a job on that
+        // cascade's next turn.
+        if ((context->cascades[i].flags & FFX_BRIXELIZER_CASCADE_STATIC) && i >= minCascade && i <= maxCascade) {
             cascadesMask |= 1 << i;
         }
     }
@@ -554,21 +605,30 @@ FfxErrorCode ffxBrixelizerCreateInstances(FfxBrixelizerContext* uncastContext, c
         const FfxBrixelizerInstanceDescription *desc = &descs[i];
         FfxBrixelizerInstanceID instanceID = instanceIDs[i];
 
+        // vkfw patch: resolved once here rather than per bake -- the description is gone by then.
+        uint32_t minCascade = 0;
+        uint32_t maxCascade = 0;
+        resolveCascadeRange(context, desc, &minCascade, &maxCascade);
+
         if (desc->flags & FFX_BRIXELIZER_INSTANCE_FLAG_DYNAMIC) {
             uint32_t instanceIndex = --context->dynamicInstanceStartIndex;
             FfxBrixelizerInstance *instance = &context->instances[instanceIndex];
 
             instance->id = instanceID;
             instance->aabb = desc->aabb;
+            instance->minCascade = minCascade;
+            instance->maxCascade = maxCascade;
         } else {
             uint32_t instanceIndex = context->numStaticInstances++;
             FfxBrixelizerInstance *instance = &context->instances[instanceIndex];
 
             instance->id = instanceID;
             instance->aabb = desc->aabb;
+            instance->minCascade = minCascade;
+            instance->maxCascade = maxCascade;
             context->instanceIndices[instanceID] = instanceIndex;
 
-            addInvalidationJob(context, desc->aabb);
+            addInvalidationJob(context, desc->aabb, minCascade, maxCascade);
 
             if (desc->outInstanceID) {
                 *desc->outInstanceID = instanceID;
@@ -591,7 +651,7 @@ FfxErrorCode ffxBrixelizerDeleteInstances(FfxBrixelizerContext* uncastContext, c
         uint32_t index = context->instanceIndices[instanceID];
         FfxBrixelizerInstance instance = context->instances[index];
 
-        addInvalidationJob(context, instance.aabb);
+        addInvalidationJob(context, instance.aabb, instance.minCascade, instance.maxCascade);
 
         instance = context->instances[--context->numStaticInstances];
         context->instances[index] = instance;

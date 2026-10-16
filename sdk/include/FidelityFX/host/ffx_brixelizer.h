@@ -27,7 +27,14 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
-#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(5938838)
+// vkfw patch: 5938838 -> 6069910. This blob is sized to the exact byte, with no headroom:
+// sizeof(FfxBrixelizerContext_Private) measured 23755352 and 5938838 * 4 is 23755352 precisely.
+// The cascade band added to FfxBrixelizerInstance costs 8 bytes on each of
+// FFX_BRIXELIZER_MAX_INSTANCES (65536) entries -- 524288 bytes, so 131072 more uint32s.
+// Anything further added to the private context has to come back here and redo that arithmetic;
+// the FFX_STATIC_ASSERT below ffx_brixelizer.cpp's context struct is what catches it, at compile
+// time rather than as a buffer overrun at run time.
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6069910)
 
 /// The size of the update description specified in 32bit values.
 ///
@@ -168,12 +175,25 @@ typedef struct FfxBrixelizerBakedUpdateDescription {
 typedef enum FfxBrixelizerInstanceFlags {
     FFX_BRIXELIZER_INSTANCE_FLAG_NONE    = 0,       ///< No instance flags set.
     FFX_BRIXELIZER_INSTANCE_FLAG_DYNAMIC = 1 << 0,  ///< This flag is set for any instance which should be added to the dynamic cascade. Indicates that this instance will be resubmitted every frame.
+    /// vkfw patch: honour minCascade/maxCascade. Opt-in because the fields are zero in every
+    /// description that does not set them -- including every caller written against the stock SDK,
+    /// where maxCascade was declared, documented and then read nowhere -- and reading them as-is
+    /// would silently confine all of those instances to cascade 0. With the flag the band is taken
+    /// literally, so a caller can also name cascade 0 on its own, which no "0 means unset"
+    /// convention could express.
+    FFX_BRIXELIZER_INSTANCE_FLAG_CASCADE_RANGE = 1 << 1,
 } FfxBrixelizerInstanceFlags;
 
 /// A structure encapsulating the parameters necessary to create an instance with Brixelizer.
 ///
 /// @ingroup ffxBrixelizer
 typedef struct FfxBrixelizerInstanceDescription {
+    /// vkfw patch: the lowest and highest LOGICAL cascade this instance is submitted to, inclusive,
+    /// and read only when FFX_BRIXELIZER_INSTANCE_FLAG_CASCADE_RANGE is set. Out-of-range values are
+    /// clamped to the context's cascade count. Keeping a large object out of the fine cascades is
+    /// what minCascade is for; keeping many small ones out of the coarse cascades, where they are
+    /// smaller than a brixel and cost a job each to contribute nothing, is what maxCascade is for.
+    uint32_t                    minCascade;
     uint32_t                    maxCascade;           ///< The index of the highest cascade this instance will be submitted to. This helps avoid submitting many small objects to least detailed cascades.
     FfxBrixelizerAABB           aabb;                 ///< An AABB surrounding the instance.
     FfxFloat32x3x4              transform;            ///< A transform of the instance into world space. The transform is in row major order.
