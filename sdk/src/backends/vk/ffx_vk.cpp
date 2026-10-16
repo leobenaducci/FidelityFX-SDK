@@ -1516,12 +1516,14 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
         vkEnumerateDeviceExtensionProperties(backendContext->physicalDevice, nullptr, &backendContext->numDeviceExtensions, backendContext->extensionProperties);
 
         // create a global descriptor pool to hold all descriptors we'll need
+        // vkfw patch: the upstream array had a duplicated SAMPLER entry and poolSizeCount = 5,
+        // which cut VK_DESCRIPTOR_TYPE_STORAGE_BUFFER off the pool (validation
+        // WARNING-CoreValidation-AllocateDescriptorSets-WrongType on every storage-buffer set).
         VkDescriptorPoolCreateInfo descriptorPoolCreateInfo = {};
         VkDescriptorPoolSize poolSizes[] = {
             { VK_DESCRIPTOR_TYPE_SAMPLER, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
             { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
-            { VK_DESCRIPTOR_TYPE_SAMPLER, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
             { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
         };
@@ -1529,7 +1531,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
         descriptorPoolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         descriptorPoolCreateInfo.pNext = nullptr;
         descriptorPoolCreateInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        descriptorPoolCreateInfo.poolSizeCount = 5;
+        descriptorPoolCreateInfo.poolSizeCount = FFX_ARRAY_ELEMENTS(poolSizes);
         descriptorPoolCreateInfo.pPoolSizes = poolSizes;
         descriptorPoolCreateInfo.maxSets = backendContext->maxEffectContexts * FFX_MAX_PASS_COUNT * MAX_PIPELINE_USAGE_PER_FRAME * FFX_MAX_QUEUED_FRAMES;
 
@@ -1724,8 +1726,10 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
     ++backendContext->refCount;
 
     // Get an available context id
+    bool effectContextFound = false;
     for (uint32_t i = 0; i < backendContext->maxEffectContexts; ++i) {
         if (!backendContext->pEffectContexts[i].active) {
+            effectContextFound = true;
             *effectContextId = i;
 
             // Reset everything accordingly
@@ -1790,12 +1794,16 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     poolSize.descriptorCount = bindlessConfig->maxBufferSrvs + bindlessConfig->maxBufferUavs;
                 }
 
+                // vkfw patch: DestroyBackendContext vkFreeDescriptorSets the bindless sets
+                // individually (VUID-vkFreeDescriptorSets-descriptorPool-00312 without the FREE
+                // bit), and up to 4 sets are allocated (texture/buffer x srv/uav) while
+                // poolSizeCount is at most 3.
                 descriptorPoolCreateInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
                 descriptorPoolCreateInfo.pNext         = nullptr;
-                descriptorPoolCreateInfo.flags         = 0;
+                descriptorPoolCreateInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
                 descriptorPoolCreateInfo.poolSizeCount = poolSizeCount;
                 descriptorPoolCreateInfo.pPoolSizes    = poolSizes;
-                descriptorPoolCreateInfo.maxSets       = poolSizeCount;
+                descriptorPoolCreateInfo.maxSets       = 4;
 
                 if (backendContext->vkFunctionTable.vkCreateDescriptorPool(
                         backendContext->device, &descriptorPoolCreateInfo, nullptr, &effectContext.bindlessDescriptorPool) != VK_SUCCESS)
@@ -1964,6 +1972,15 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
 
             break;
         }
+    }
+
+    // Without this, exhausting the effect-context pool left *effectContextId uninitialized while
+    // still returning FFX_OK: the caller then indexed pEffectContexts/pResources with stack
+    // garbage, silently corrupting other live contexts' state.
+    if (!effectContextFound) {
+        --backendContext->refCount;
+        FFX_ASSERT_FAIL("FFXInterface: Vulkan: No free effect context slot. Increase maxContexts passed to ffxGetInterfaceVK.");
+        return FFX_ERROR_OUT_OF_RANGE;
     }
 
     return FFX_OK;
@@ -2146,7 +2163,10 @@ FfxErrorCode DestroyBackendContextVK(FfxInterface* backendInterface, FfxUInt32 e
     if (effectContext.bindlessDescriptorPool)
     {
         backendContext->vkFunctionTable.vkDestroyDescriptorPool(backendContext->device, effectContext.bindlessDescriptorPool, VK_NULL_HANDLE);
-        effectContext.bindlessTextureSrvDescriptorSetLayout = VK_NULL_HANDLE;
+        // vkfw patch: upstream nulled bindlessTextureSrvDescriptorSetLayout here (already null),
+        // leaving a stale pool handle that got vkDestroyDescriptorPool'd again when the effect
+        // context slot was reused (double destroy -> "Invalid VkDescriptorPool Object").
+        effectContext.bindlessDescriptorPool = VK_NULL_HANDLE;
     }
 
     // Free up for use by another context
