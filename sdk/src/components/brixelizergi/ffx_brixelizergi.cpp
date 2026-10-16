@@ -1072,6 +1072,13 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
         for (int32_t currentSurfaceIndex = 0; currentSurfaceIndex < FFX_ARRAY_ELEMENTS(internalSurfaceDesc); ++currentSurfaceIndex)
         {
             const FfxInternalResourceDescription* currentSurfaceDescription = &internalSurfaceDesc[currentSurfaceIndex];
+
+            // The application's own, registered with each dispatch.
+            if ((pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && currentSurfaceDescription->id == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
+            {
+                memset(&pContext->resources[currentSurfaceDescription->id], 0, sizeof(FfxResourceInternal));
+                continue;
+            }
             const FfxResourceDescription          resourceDescription       = {currentSurfaceDescription->type,
                                                                                currentSurfaceDescription->format,
                                                                                currentSurfaceDescription->width,
@@ -1238,6 +1245,8 @@ static FfxErrorCode brixelizerGIRelease(FfxBrixelizerGIContext_Private* pContext
     // Release internal resources.
     for (int32_t currentResourceIndex = 0; currentResourceIndex < FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT_INTERNAL; ++currentResourceIndex)
     {
+        if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && currentResourceIndex == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
+            continue;
         ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[currentResourceIndex], pContext->effectContextId);
     }
 
@@ -1364,6 +1373,11 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                                                      &pDispatchDescription->sdfAtlas,
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
+    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
+        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
+                                                                         &pDispatchDescription->radianceCache,
+                                                                         pContext->effectContextId,
+                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDispatchDescription->bricksAABBs,
                                                                      pContext->effectContextId,
@@ -1777,6 +1791,11 @@ static FfxErrorCode brixelizerGIDebugVisualization(FfxBrixelizerGIContext_Privat
                                                                      &pDebugDescription->sdfAtlas,
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
+    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
+        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
+                                                                         &pDebugDescription->radianceCache,
+                                                                         pContext->effectContextId,
+                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDebugDescription->bricksAABBs,
                                                                      pContext->effectContextId,
