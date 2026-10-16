@@ -196,6 +196,13 @@ void ffxCacaoUpdateConstants(FfxCacaoConstants*            consts,
     consts->NDCToViewAdd[0] = consts->CameraTanHalfFOV[0] * -1.0f;
     consts->NDCToViewAdd[1] = consts->CameraTanHalfFOV[1] * 1.0f;
 
+    // vkfw: a jittered projection (translation * projection) carries its sub-pixel shift in [8] and [9], and the depth
+    // buffer was rasterized shifted by it: ndc = ndc_unjittered + jitter. Unproject with the same shift, or every
+    // reconstructed position is off by up to half a pixel in a different direction each frame.
+    // Both are zero for an unjittered projection.
+    consts->NDCToViewAdd[0] -= consts->CameraTanHalfFOV[0] * (*proj)[8];
+    consts->NDCToViewAdd[1] -= consts->CameraTanHalfFOV[1] * (*proj)[9];
+
     const float ratio  = ((float)bufferSizeInfo->inputOutputBufferWidth) / ((float)bufferSizeInfo->depthBufferWidth);
     const float border = (1.0f - ratio) / 2.0f;
     for (int i = 0; i < FFX_CACAO_ARRAY_SIZE(consts->DepthBufferUVToViewMul); ++i)
@@ -309,12 +316,13 @@ void ffxCacaoUpdateConstants(FfxCacaoConstants*            consts,
             const int b = spmap[subPass];
 
             float ca, sa;
-            const float angle0 = ((float)a + (float)b / (float)subPassCount) * (PI) * 0.5f;
+            const float angle0 = ((float)a + (float)b / (float)subPassCount) * (PI) * 0.5f + additionalAngleOffset;
 
             ca = FFX_CACAO_COS(angle0);
             sa = FFX_CACAO_SIN(angle0);
 
-            const float scale = 1.0f + (a - 1.5f + (b - (subPassCount - 1.0f) * 0.5f) / (float)subPassCount) * 0.07f;
+            // The default radius offset is 0.0 ("not set"), which must leave the kernel alone, not collapse it.
+            const float scale = (1.0f + (a - 1.5f + (b - (subPassCount - 1.0f) * 0.5f) / (float)subPassCount) * 0.07f) * (additionalRadiusScale > 0.0f ? additionalRadiusScale : 1.0f);
 
             consts->PatternRotScaleMatrices[passId][subPass][0] = scale * ca;
             consts->PatternRotScaleMatrices[passId][subPass][1] = scale * -sa;
