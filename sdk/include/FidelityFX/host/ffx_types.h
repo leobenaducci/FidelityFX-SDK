@@ -77,7 +77,17 @@
 #define FFX_API __declspec(dllexport)
 #endif // #if defined (FFX_GCC)
 
-#define FFX_SDK_DEFAULT_CONTEXT_SIZE (1024 * 128)
+/// vkfw patch: opaque context blobs are sized for Windows, where wchar_t is 2 bytes. Every
+/// private context embeds wide resource and pass names, which double in size where wchar_t is 4
+/// bytes, so the blobs are doubled there too. Both the SDK and its callers see these headers, so
+/// the size agrees on both sides of the API.
+#if defined(_WIN32)
+#define FFX_PLATFORM_CONTEXT_SIZE(size) (size)
+#else
+#define FFX_PLATFORM_CONTEXT_SIZE(size) ((size) * 2)
+#endif
+
+#define FFX_SDK_DEFAULT_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(1024 * 128)
 
 /// Maximum supported number of simultaneously bound SRVs.
 ///

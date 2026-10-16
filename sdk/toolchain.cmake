@@ -46,7 +46,14 @@ if (MSVC)
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /GR- /fp:fast /GS /Gy")
 endif()
 
-if (FFX_API_BACKEND STREQUAL DX12_X64 OR
+if (FFX_API_BACKEND STREQUAL VK_X64 AND CMAKE_HOST_UNIX)
+
+	# vkfw patch: Linux. Same library names as on Windows (the drel postfix), but no forced
+	# Windows system name or VS platform -- either one makes CMake treat this as a cross-compile
+	# to Windows, and Ninja/Makefiles reject a generator platform outright.
+	set(CMAKE_RELWITHDEBINFO_POSTFIX drel)
+
+elseif (FFX_API_BACKEND STREQUAL DX12_X64 OR
 	FFX_API_BACKEND STREQUAL VK_X64)
 
 	set(CMAKE_RELWITHDEBINFO_POSTFIX drel)

@@ -134,7 +134,12 @@ endfunction()
 macro (add_shader_output)
     foreach (_SHADER_SRC ${ARGN})
 		#message (STATUS ${_SHADER_SRC})
-		list (APPEND FFX_SC_PERMUTATION_OUTPUTS "${_SHADER_SRC}")
+		# vkfw patch: compile_shaders_with_depfile's PARENT_SCOPE set leaks the output variable's
+		# own name into the list (e.g. "FSR2_PERMUTATION_OUTPUTS"). MSBuild ignores a dependency on
+		# a file that does not exist; Ninja and Make refuse to build. Only real paths are outputs.
+		if (IS_ABSOLUTE "${_SHADER_SRC}")
+			list (APPEND FFX_SC_PERMUTATION_OUTPUTS "${_SHADER_SRC}")
+		endif()
     endforeach()
 
 	set (FFX_SC_PERMUTATION_OUTPUTS ${FFX_SC_PERMUTATION_OUTPUTS} PARENT_SCOPE)

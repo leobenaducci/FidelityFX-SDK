@@ -50,7 +50,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup ffxBrixgi
-#define FFX_BRIXELIZER_GI_CONTEXT_SIZE (210000)
+#define FFX_BRIXELIZER_GI_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(210000)
 
 /// FidelityFX Brixelizer GI context count
 /// 

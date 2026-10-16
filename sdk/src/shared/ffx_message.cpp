@@ -57,8 +57,12 @@ void ffxPrintMessage(uint32_t type, const wchar_t* message)
         s_messageCallback(type, message);
     }
 #else
-    FFX_UNUSED(type);
-    FFX_UNUSED(message);
+    // vkfw patch: upstream dropped every message off Windows, the installed callback included
+    // (and did not compile: FFX_UNUSED is not visible here). stderr stands in for OutputDebugString.
+    if (s_messageCallback)
+        s_messageCallback(type, message);
+    else
+        fwprintf(stderr, L"%ls: %ls\n", type == FFX_MESSAGE_TYPE_ERROR ? L"FSR_API_DEBUG_ERROR" : L"FSR_API_DEBUG_WARNING", message);
 #endif
     return;
 }

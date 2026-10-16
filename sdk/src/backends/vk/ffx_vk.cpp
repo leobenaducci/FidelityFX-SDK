@@ -271,6 +271,18 @@ typedef struct BackendContext_VK {
     uint32_t                breadcrumbsMemoryIndex = 0;
 
 } BackendContext_VK;
+// vkfw patch: the backend context sits at the start of the caller's scratch memory, which is only as
+// aligned as its allocator makes it (16 bytes for malloc and new on x86-64).
+static_assert(alignof(BackendContext_VK) <= 16, "the scratch memory handed to ffxGetInterfaceVK is not aligned for BackendContext_VK");
+
+// vkfw patch: the arrays carved out of the scratch memory are each aligned to this, and the size below
+// leaves room for it. They used to be packed at 4-byte offsets, while EffectContext is alignas(32): GCC
+// stores into it with aligned SIMD (vmovdqa) and faulted on the misaligned array; MSVC's codegen did not.
+static constexpr size_t kScratchArrayAlignment = 64;
+static uint8_t* AlignScratchPointerVK(uint8_t* pMem)
+{
+    return (uint8_t*)FFX_ALIGN_UP((uintptr_t)pMem, kScratchArrayAlignment);
+}
 
 FFX_API size_t ffxGetScratchMemorySizeVK(VkPhysicalDevice physicalDevice, size_t maxContexts)
 {
@@ -288,7 +300,7 @@ FFX_API size_t ffxGetScratchMemorySizeVK(VkPhysicalDevice physicalDevice, size_t
     uint32_t contextArraySize = FFX_ALIGN_UP(maxContexts * sizeof(BackendContext_VK::EffectContext), sizeof(uint32_t));
     
     return FFX_ALIGN_UP(sizeof(BackendContext_VK) + extensionPropArraySize + gpuJobDescArraySize + resourceViewArraySize + stagingRingBufferArraySize +
-                            pipelineArraySize + resourceArraySize + contextArraySize,
+                            pipelineArraySize + resourceArraySize + contextArraySize + 7 * kScratchArrayAlignment,
                         sizeof(uint64_t));
 }
 
@@ -341,7 +353,13 @@ FfxErrorCode ffxGetInterfaceVK(
     backendInterface->fpBreadcrumbsWrite = BreadcrumbsWriteVK;
     backendInterface->fpBreadcrumbsPrintDeviceInfo = BreadcrumbsPrintDeviceInfoVK;
     backendInterface->fpRegisterConstantBufferAllocator = RegisterConstantBufferAllocatorVK;
+#if defined(_WIN32)
     backendInterface->fpSwapChainConfigureFrameGeneration = ffxSetFrameGenerationConfigToSwapchainVK;
+#else
+    // vkfw patch: the frame-interpolation swapchain (FrameInterpolationSwapchain/) is Win32 code and
+    // is not built off Windows; nothing but FSR3 frame generation calls this.
+    backendInterface->fpSwapChainConfigureFrameGeneration = nullptr;
+#endif
 
     // Memory assignments
     backendInterface->scratchBuffer = scratchBuffer;
@@ -1411,26 +1429,31 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
         uint8_t* pMem = (uint8_t*)((BackendContext_VK*)(backendContext + 1));
 
         // Map gpu job array
+        pMem = AlignScratchPointerVK(pMem);
         backendContext->pGpuJobs = (FfxGpuJobDescription*)pMem;
         memset(backendContext->pGpuJobs, 0, gpuJobDescArraySize);
         pMem += gpuJobDescArraySize;
 
         // Map the resource view array
+        pMem = AlignScratchPointerVK(pMem);
         backendContext->pResourceViews = (BackendContext_VK::VkResourceView*)(pMem);
         memset(backendContext->pResourceViews, 0, resourceViewArraySize);
         pMem += resourceViewArraySize;
 
         // Map the staging ring buffer array
+        pMem = AlignScratchPointerVK(pMem);
         backendContext->pStagingRingBuffer = (uint8_t*)pMem;
         memset(backendContext->pStagingRingBuffer, 0, stagingRingBufferArraySize);
         pMem += stagingRingBufferArraySize;
 
         // Map pipeline array
+        pMem = AlignScratchPointerVK(pMem);
         backendContext->pPipelineLayouts = (BackendContext_VK::PipelineLayout*)pMem;
         memset(backendContext->pPipelineLayouts, 0, pipelineArraySize);
         pMem += pipelineArraySize;
 
         // Map resource array
+        pMem = AlignScratchPointerVK(pMem);
         backendContext->pResources = (BackendContext_VK::Resource*)pMem;
         memset(backendContext->pResources, 0, resourceArraySize);
         pMem += resourceArraySize;
@@ -1441,11 +1464,13 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
         }
 
         // Map context array
+        pMem = AlignScratchPointerVK(pMem);
         backendContext->pEffectContexts = (BackendContext_VK::EffectContext*)pMem;
         memset(backendContext->pEffectContexts, 0, contextArraySize);
         pMem += contextArraySize;
 
         // Map extension array
+        pMem = AlignScratchPointerVK(pMem);
         backendContext->extensionProperties = (VkExtensionProperties*)pMem;
 
         // if vkGetDeviceProcAddr is NULL, use the one from the vulkan header

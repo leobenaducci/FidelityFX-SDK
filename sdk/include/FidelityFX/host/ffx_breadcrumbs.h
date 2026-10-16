@@ -56,7 +56,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup ffxBreadcrumbs
-#define FFX_BREADCRUMBS_CONTEXT_SIZE (128)
+#define FFX_BREADCRUMBS_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(128)
 
 /// Maximal number of markers that can be written into single memory block.
 ///

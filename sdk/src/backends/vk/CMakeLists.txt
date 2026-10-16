@@ -57,6 +57,12 @@ file(GLOB PRIVATE_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/FrameInterpolationSwapchain/*.cpp"
 )
 
+if (NOT WIN32)
+	# vkfw patch: the frame-interpolation swapchain wraps a Win32 swapchain (HWND, Win32 threads
+	# and events); nothing outside FSR3 frame generation uses it.
+	list(FILTER PRIVATE_SOURCE EXCLUDE REGEX "/FrameInterpolationSwapchain/")
+endif()
+
 if (FFX_FSR1 OR FFX_ALL)
 	set(FFX_FSR1_PRIVATE_SOURCE
 		"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/ffx_fsr1_shaderblobs.h"
@@ -491,7 +497,7 @@ endif()
 
 if (FFX_BLUR OR FFX_ALL)
 	target_compile_definitions(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE FFX_BLUR)
-	include (CMakeShadersBlur.txt)
+	include (CMakeShadersBLUR.txt)
 endif()
 
 if (FFX_VRS OR FFX_ALL)

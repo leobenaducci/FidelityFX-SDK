@@ -57,7 +57,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup FfxLens
-#define FFX_LENS_CONTEXT_SIZE (9200)
+#define FFX_LENS_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(9200)
 
 #if defined(__cplusplus)
 extern "C" {

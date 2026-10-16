@@ -64,7 +64,7 @@
 /// The size of the context specified in uint32_t units.
 ///
 /// @ingroup ffxBlur
-#define FFX_BLUR_CONTEXT_SIZE (1024)
+#define FFX_BLUR_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(1024)
 
 #if defined(__cplusplus)
 extern "C" {

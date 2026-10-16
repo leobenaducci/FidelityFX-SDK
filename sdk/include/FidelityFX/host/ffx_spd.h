@@ -57,7 +57,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup FfxSpd
-#define FFX_SPD_CONTEXT_SIZE       (9300)
+#define FFX_SPD_CONTEXT_SIZE       FFX_PLATFORM_CONTEXT_SIZE(9300)
 
 /// If this ever changes, need to also reflect a change in number
 /// of resources in ffx_spd_resources.h

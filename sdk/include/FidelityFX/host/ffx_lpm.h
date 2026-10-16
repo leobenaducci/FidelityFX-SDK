@@ -57,7 +57,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup FfxLpm
-#define FFX_LPM_CONTEXT_SIZE (9300)
+#define FFX_LPM_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(9300)
 
 #if defined(__cplusplus)
 extern "C" {

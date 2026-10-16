@@ -57,7 +57,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup FfxVrs
-#define FFX_VRS_CONTEXT_SIZE (16536)
+#define FFX_VRS_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(16536)
 
 #if defined(__cplusplus)
 extern "C" {

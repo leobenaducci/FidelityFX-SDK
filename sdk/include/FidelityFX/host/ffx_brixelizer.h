@@ -27,12 +27,18 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
-#define FFX_BRIXELIZER_CONTEXT_SIZE            (5938838)
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(5938838)
 
 /// The size of the update description specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
+#if defined(_WIN32)
 #define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 2099376
+#else
+// vkfw patch: the same private struct under the LP64 ABI (measured with GCC on x86-64 Linux);
+// ffx_brixelizer.cpp asserts the two sizes are equal.
+#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 2100976
+#endif
 
 #ifdef __cplusplus
 extern "C" {

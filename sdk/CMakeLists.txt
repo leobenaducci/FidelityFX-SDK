@@ -80,6 +80,9 @@ if(CMAKE_GENERATOR_PLATFORM STREQUAL "Gaming.Xbox.Scarlett.x64")
 	set(FFX_PLATFORM_NAME gdk_scarlett_x64)
 elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "Gaming.Xbox.XboxOne.x64")
 	set(FFX_PLATFORM_NAME gdk_xboxone_x64)
+elseif(CMAKE_HOST_UNIX)
+    # vkfw patch: Linux has no generator platform; name the libs as the Windows x64 build does
+    set(FFX_PLATFORM_NAME x64)
 elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "x64" OR CMAKE_EXE_LINKER_FLAGS STREQUAL "/machine:x64")
     set(FFX_PLATFORM_NAME x64)
 elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "Win32" OR CMAKE_EXE_LINKER_FLAGS STREQUAL "/machine:X86")
@@ -116,7 +119,9 @@ endif()
 if (NOT FFX_CUSTOM_API)
 
 	# Embed PDBs in the debug versions of the libs
-	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Z7 /Od")
+	if (MSVC)
+		set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Z7 /Od")
+	endif()
     
 	# Write debug, profile, and release versions of the static libs to the /bin folder as they are uniquely named	
 	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
@@ -170,6 +175,15 @@ endif()
 
 # Setup common variables
 set(FFX_SC_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/FidelityFX_SC.exe)
+if (CMAKE_HOST_UNIX)
+	# vkfw patch: the shader compiler only exists as a Windows binary. FFX_SC_LAUNCHER is a script
+	# that runs it under wine and translates paths both ways (vkfw: scripts/ffx_sc_wine.sh).
+	# A list, so COMMAND ${EXECUTABLE} expands to "<launcher> <exe>".
+	if (NOT FFX_SC_LAUNCHER)
+		message(FATAL_ERROR "FFX_SC_LAUNCHER must name a wrapper that runs FidelityFX_SC.exe on this host")
+	endif()
+	set(FFX_SC_EXECUTABLE ${FFX_SC_LAUNCHER} ${FFX_SC_EXECUTABLE})
+endif()
 set(FFX_INCLUDE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(FFX_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/libs)
 set(FFX_BIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/bin/ffx_sdk)
@@ -179,6 +193,11 @@ set(FFX_GPU_PATH ${CMAKE_CURRENT_SOURCE_DIR}/include/FidelityFX/gpu)
 set(FFX_COMPONENTS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/components)
 set(FFX_HOST_BACKENDS_PATH ${FFX_HOST_PATH}/backends)
 set(FFX_SRC_BACKENDS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/backends)
+
+if (CMAKE_HOST_UNIX)
+	# vkfw patch: MSVC CRT shims for the host code (see the header), for SDK sources only
+	add_compile_options(-include ${FFX_SHARED_PATH}/ffx_posix_compat.h)
+endif()
 
 # ------------------------------------------------------
 # Define common source groupings used by all effects
