@@ -1376,6 +1376,12 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                                                      &pDispatchDescription->sdfAtlas,
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
+    // An application-owned cache the description leaves empty would be bound as a null resource.
+    if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && pDispatchDescription->radianceCache.resource == nullptr)
+        return FFX_ERROR_INVALID_ARGUMENT;
+    if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE) && pDispatchDescription->bricksSH.resource == nullptr)
+        return FFX_ERROR_INVALID_ARGUMENT;
+
     if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
         pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                          &pDispatchDescription->radianceCache,
@@ -1799,6 +1805,12 @@ static FfxErrorCode brixelizerGIDebugVisualization(FfxBrixelizerGIContext_Privat
                                                                      &pDebugDescription->sdfAtlas,
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
+    // An application-owned cache the description leaves empty would be bound as a null resource.
+    if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && pDebugDescription->radianceCache.resource == nullptr)
+        return FFX_ERROR_INVALID_ARGUMENT;
+    if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE) && pDebugDescription->bricksSH.resource == nullptr)
+        return FFX_ERROR_INVALID_ARGUMENT;
+
     if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
         pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                          &pDebugDescription->radianceCache,
