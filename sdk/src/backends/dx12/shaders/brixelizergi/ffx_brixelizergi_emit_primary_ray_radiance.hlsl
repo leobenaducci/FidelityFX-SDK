@@ -32,6 +32,7 @@
 
 #define BRIXELIZER_GI_BIND_UAV_RADIANCE_CACHE                0
 #define BRIXELIZER_GI_BIND_UAV_BRICKS_DIRECT_SH				 1
+#define BRIXELIZER_GI_BIND_UAV_BRICKS_SH_STATE             2  // vkfw: the seeded-texel bits (FfxBrixelizerGIEmitRadiance)
 
 #define BRIXELIZER_BIND_SAMPLER_CLAMP_LINEAR_SAMPLER         0
 #define BRIXELIZER_BIND_SAMPLER_CLAMP_NEAREST_SAMPLER        1

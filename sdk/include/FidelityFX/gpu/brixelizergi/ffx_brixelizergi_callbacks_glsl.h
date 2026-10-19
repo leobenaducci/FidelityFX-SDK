@@ -1035,6 +1035,16 @@ void StoreBricksSHState(FfxUInt32 elementIdx, FfxUInt32x4 value)
 }
 #endif
 
+#if defined(BRIXELIZER_GI_BIND_UAV_BRICKS_SH_STATE)
+// vkfw: clears bits of the state's z (word 0) or w (word 1) atomically, returning the word as it was.
+FfxUInt32 AtomicClearBricksSHStateBits(FfxUInt32 elementIdx, FfxUInt32 word, FfxUInt32 mask)
+{
+    if (word == 0u)
+        return atomicAnd(g_bctx_bricks_sh_state.data[elementIdx].z, ~mask);
+    return atomicAnd(g_bctx_bricks_sh_state.data[elementIdx].w, ~mask);
+}
+#endif
+
 #if defined BRIXELIZER_GI_BIND_UAV_TEMP_SPECULAR_RAY_SWAP
 FfxUInt32 LoadTempSpecularRaySwap(FfxUInt32 elementIdx)
 {

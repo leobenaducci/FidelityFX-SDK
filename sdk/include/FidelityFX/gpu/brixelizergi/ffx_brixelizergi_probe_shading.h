@@ -525,14 +525,35 @@ FfxInt32x3 FfxBrixelizerGIPickMajorDir(FfxFloat32x3 r)
 void FfxBrixelizerGIEmitRadiance(FfxUInt32 brick_id, FfxFloat32x3 uvw, FfxFloat32x3 direction, FfxFloat32x3 radiance, FfxFloat32 weight)
 {
     FfxUInt32x3      brick_offset = FfxBrixelizerGetSDFAtlasOffset(brick_id) / 2;
-    FfxInt32x3       coord        = FfxInt32x3(ffxSaturate(uvw) * FfxFloat32(4.0));
+    // vkfw: clamped to the brick's 4 texels. saturate(uvw) * 4 reaches 4 at a voxel's far face, and the store below
+    // then wrote into the neighbouring atlas brick's first texel.
+    FfxInt32x3       coord        = min(FfxInt32x3(ffxSaturate(uvw) * FfxFloat32(4.0)), FfxInt32x3(3, 3, 3));
     FfxFloat32x3     src          = LoadRadianceCache(brick_offset + coord);
     const FfxFloat32 EPS          = FfxFloat32(1.0e-6);
 
     if (dot(src, src) < EPS * EPS)
         weight = FfxFloat32(0.0);
 
-    FfxFloat32x3 new_value = ffxLerp(radiance, src, weight);
+    // vkfw: a texel the application seeded is a placeholder, not history. Its bit in the brick's SH state (z: texels 0..31,
+    // w: 32..63, x + 4y + 16z) says so, and the first real radiance replaces it outright -- kept as history, a seed would
+    // hold ~7/8 of every injection for many frames. Cleared atomically, so concurrent injections into one brick neither
+    // lose a clear nor write back stale halves of the state. A black sample is stored as the least the format holds, not
+    // 0: 0 reads as "empty", and the application would seed it again.
+    FfxFloat32   texel_weight   = weight;
+    FfxFloat32x3 texel_radiance = radiance;
+#if defined(BRIXELIZER_GI_BIND_UAV_BRICKS_SH_STATE)
+    {
+        const FfxUInt32 bit  = FfxUInt32(coord.x + coord.y * 4 + coord.z * 16);
+        const FfxUInt32 mask = 1u << (bit & 31u);
+        if ((AtomicClearBricksSHStateBits(FfxBrixelizerBrickGetIndex(brick_id), bit >> 5u, mask) & mask) != 0u)
+        {
+            texel_weight   = FfxFloat32(0.0);
+            texel_radiance = ffxMax(radiance, FFX_BROADCAST_FLOAT32X3(1.0e-4));
+        }
+    }
+#endif
+
+    FfxFloat32x3 new_value = ffxLerp(texel_radiance, src, texel_weight);
 
     if (any(isnan(new_value)))
         new_value = FFX_BROADCAST_FLOAT32X3(0.0);
