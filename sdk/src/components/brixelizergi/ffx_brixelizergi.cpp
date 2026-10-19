@@ -1074,7 +1074,8 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
             const FfxInternalResourceDescription* currentSurfaceDescription = &internalSurfaceDesc[currentSurfaceIndex];
 
             // The application's own, registered with each dispatch.
-            if ((pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && currentSurfaceDescription->id == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
+            if (((pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && currentSurfaceDescription->id == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
+                || ((pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE) && currentSurfaceDescription->id == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH))
             {
                 memset(&pContext->resources[currentSurfaceDescription->id], 0, sizeof(FfxResourceInternal));
                 continue;
@@ -1247,6 +1248,8 @@ static FfxErrorCode brixelizerGIRelease(FfxBrixelizerGIContext_Private* pContext
     {
         if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && currentResourceIndex == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
             continue;
+        if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE) && currentResourceIndex == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH)
+            continue;
         ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[currentResourceIndex], pContext->effectContextId);
     }
 
@@ -1378,6 +1381,11 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                                                          &pDispatchDescription->radianceCache,
                                                                          pContext->effectContextId,
                                                                          &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
+    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE)
+        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
+                                                                         &pDispatchDescription->bricksSH,
+                                                                         pContext->effectContextId,
+                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH]);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDispatchDescription->bricksAABBs,
                                                                      pContext->effectContextId,
@@ -1796,6 +1804,11 @@ static FfxErrorCode brixelizerGIDebugVisualization(FfxBrixelizerGIContext_Privat
                                                                          &pDebugDescription->radianceCache,
                                                                          pContext->effectContextId,
                                                                          &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
+    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE)
+        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
+                                                                         &pDebugDescription->bricksSH,
+                                                                         pContext->effectContextId,
+                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH]);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDebugDescription->bricksAABBs,
                                                                      pContext->effectContextId,
