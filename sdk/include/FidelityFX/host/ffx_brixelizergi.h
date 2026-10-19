@@ -90,7 +90,7 @@ typedef enum FfxBrixelizerGIFlags
     FFX_BRIXELIZER_GI_FLAG_DISABLE_SPECULAR = (1 << 1),  ///< Disable specular GI.
     FFX_BRIXELIZER_GI_FLAG_DISABLE_DENOISER = (1 << 2),  ///< Disable denoising. Only allowed at native resolution.
     FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE = (1 << 3),  ///< The radiance cache is the application's (radianceCache in the dispatch and debug descriptions), not created by the context.
-    FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE = (1 << 4),  ///< The bricks' irradiance SH is the application's (bricksSH in the dispatch and debug descriptions), not created by the context.
+    FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE = (1 << 4),  ///< The bricks' irradiance SH and its state are the application's (bricksSH and bricksSHState in the dispatch and debug descriptions), not created by the context.
 } FfxBrixelizerGIFlags;
 
 /// An enumeration of the quality modes supported by FidelityFX Brixelizer GI.
@@ -164,6 +164,7 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource outputSpecularGI;           ///< A texture to write the output specular GI calculated by Brixelizer GI.
     FfxResource radianceCache;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE: the radiance cache, a Texture3D of (FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2)^3 R11G11B10_FLOAT.
     FfxResource bricksSH;                   ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE: the irradiance cache, a buffer of FFX_BRIXELIZER_MAX_BRICKS * 9 uint2 (an L2 SH per brick, each coefficient four halves: rgb and the sample count), zeroed before first use.
+    FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE: its state, a buffer of FFX_BRIXELIZER_MAX_BRICKS uint4 (xy: the brick's dominant direction as four halves, which PropagateSH tests neighbours' facing against), zeroed before first use.
 
     FfxBrixelizerRawContext *brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDispatchDescription;
@@ -203,6 +204,7 @@ typedef struct FfxBrixelizerGIDebugDescription
     FfxResource outputDebug;             ///< The output texture for the debug visualization.
     FfxResource radianceCache;           ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE: the radiance cache, as in FfxBrixelizerGIDispatchDescription.
     FfxResource bricksSH;                ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE: the irradiance cache, as in FfxBrixelizerGIDispatchDescription.
+    FfxResource bricksSHState;           ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_IRRADIANCE_CACHE: its state, as in FfxBrixelizerGIDispatchDescription.
 
     FfxBrixelizerRawContext* brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDebugDescription;
