@@ -810,6 +810,33 @@ static void updateConstantBuffer(FfxBrixelizerGIContext_Private* pContext, uint3
     pContext->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&pContext->contextDescription.backendInterface, data, cbSizes[id], &pContext->constantBuffers[id]);
 }
 
+// vkfw: the resources FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE / _EXTERNAL_BRICK_CACHE hand to the application.
+static bool brixelizerGIIsExternalResource(uint32_t flags, uint32_t resourceId)
+{
+    if ((flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
+        return true;
+    if ((flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE) &&
+        (resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH || resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_DIRECT_SH ||
+         resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH_STATE))
+        return true;
+    return false;
+}
+
+// vkfw: register the application's caches in place of the internal resources they replace.
+static void brixelizerGIRegisterExternalResources(FfxBrixelizerGIContext_Private* pContext, const FfxResource* radianceCache,
+    const FfxResource* bricksSH, const FfxResource* bricksDirectSH, const FfxResource* bricksSHState)
+{
+    FfxInterface& backend = pContext->contextDescription.backendInterface;
+    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
+        backend.fpRegisterResource(&backend, radianceCache, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
+    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE)
+    {
+        backend.fpRegisterResource(&backend, bricksSH, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH]);
+        backend.fpRegisterResource(&backend, bricksDirectSH, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_DIRECT_SH]);
+        backend.fpRegisterResource(&backend, bricksSHState, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH_STATE]);
+    }
+}
+
 static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext, const FfxBrixelizerGIContextDescription* pContextDescription)
 {
     FFX_ASSERT(pContext);
@@ -1074,7 +1101,7 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
             const FfxInternalResourceDescription* currentSurfaceDescription = &internalSurfaceDesc[currentSurfaceIndex];
 
             // The application's own, registered with each dispatch.
-            if ((pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && currentSurfaceDescription->id == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
+            if (brixelizerGIIsExternalResource(pContextDescription->flags, currentSurfaceDescription->id))
             {
                 memset(&pContext->resources[currentSurfaceDescription->id], 0, sizeof(FfxResourceInternal));
                 continue;
@@ -1245,7 +1272,7 @@ static FfxErrorCode brixelizerGIRelease(FfxBrixelizerGIContext_Private* pContext
     // Release internal resources.
     for (int32_t currentResourceIndex = 0; currentResourceIndex < FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT_INTERNAL; ++currentResourceIndex)
     {
-        if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && currentResourceIndex == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
+        if (brixelizerGIIsExternalResource(pContext->contextDescription.flags, currentResourceIndex))
             continue;
         ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[currentResourceIndex], pContext->effectContextId);
     }
@@ -1373,11 +1400,8 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                                                      &pDispatchDescription->sdfAtlas,
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
-    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
-        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
-                                                                         &pDispatchDescription->radianceCache,
-                                                                         pContext->effectContextId,
-                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
+    brixelizerGIRegisterExternalResources(pContext, &pDispatchDescription->radianceCache, &pDispatchDescription->bricksSH,
+                                          &pDispatchDescription->bricksDirectSH, &pDispatchDescription->bricksSHState);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDispatchDescription->bricksAABBs,
                                                                      pContext->effectContextId,
@@ -1553,6 +1577,9 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
 
         for (const uint32_t* resourceID = resourceIDs; resourceID < resourceIDs + FFX_ARRAY_ELEMENTS(resourceIDs); ++resourceID)
         {
+            // vkfw: the application's caches outlive this context (a resize recreates it), so its first frame must not wipe them.
+            if (brixelizerGIIsExternalResource(pContext->contextDescription.flags, *resourceID))
+                continue;
             job.clearJobDescriptor.target = pContext->resources[*resourceID];
             pContext->contextDescription.backendInterface.fpScheduleGpuJob(&pContext->contextDescription.backendInterface, &job);
         }
@@ -1574,8 +1601,13 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
     }
 
     scheduleDispatch(pContext, &pContext->pipelineGenerateDisocclusionMask, (bufferWidth + 7) / 8, (bufferHeight + 7) / 8, 1);
-    scheduleDispatch(pContext, &pContext->pipelinePrepareClearCache, 1, 1, 1);
-    scheduleIndirectDispatch(pContext, &pContext->pipelineClearCache, pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RAY_SWAP_INDIRECT_ARGS], 0);
+    // vkfw: with an external brick cache the application initialises a new brick's cache itself -- cleared, or carried
+    // over from the brick that covered the same place before -- and has done so by now.
+    if (!(pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE))
+    {
+        scheduleDispatch(pContext, &pContext->pipelinePrepareClearCache, 1, 1, 1);
+        scheduleIndirectDispatch(pContext, &pContext->pipelineClearCache, pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RAY_SWAP_INDIRECT_ARGS], 0);
+    }
     scheduleDispatch(pContext, &pContext->pipelineEmitPrimaryRayRadiance, (bufferWidth / 4 + 7) / 8, (bufferHeight / 4 + 7) / 8, 1);
 
     FfxBrixelizerGIPassConstants passConstants = {};
@@ -1791,11 +1823,8 @@ static FfxErrorCode brixelizerGIDebugVisualization(FfxBrixelizerGIContext_Privat
                                                                      &pDebugDescription->sdfAtlas,
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
-    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
-        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
-                                                                         &pDebugDescription->radianceCache,
-                                                                         pContext->effectContextId,
-                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
+    brixelizerGIRegisterExternalResources(pContext, &pDebugDescription->radianceCache, &pDebugDescription->bricksSH,
+                                          &pDebugDescription->bricksDirectSH, &pDebugDescription->bricksSHState);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDebugDescription->bricksAABBs,
                                                                      pContext->effectContextId,
@@ -1901,6 +1930,11 @@ FfxErrorCode ffxBrixelizerGIContextCreate(FfxBrixelizerGIContext* pContext, cons
     FFX_RETURN_ON_ERROR(pContextDescription->backendInterface.fpGetDeviceCapabilities, FFX_ERROR_INCOMPLETE_INTERFACE);
     FFX_RETURN_ON_ERROR(pContextDescription->backendInterface.fpCreateBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
     FFX_RETURN_ON_ERROR(pContextDescription->backendInterface.fpDestroyBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
+
+    // vkfw: the context's clear pass also zeroes a new brick's radiance, so the application can only take over that pass
+    // when it owns the radiance cache too.
+    FFX_RETURN_ON_ERROR(!(pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE) ||
+                        (pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE), FFX_ERROR_INVALID_ARGUMENT);
 
     // if a scratch buffer is declared, then we must have a size
     if (pContextDescription->backendInterface.scratchBuffer)
