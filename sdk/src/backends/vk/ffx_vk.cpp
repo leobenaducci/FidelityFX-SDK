@@ -35,6 +35,10 @@
 
 #include <vulkan/vulkan.h>
 
+// vkfw patch: the flags of every bindless binding (see the bindless pool in CreateBackendContextVK).
+static constexpr VkDescriptorBindingFlags kBindlessBindingFlags =
+    VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+
 // prototypes for functions in the interface
 FfxVersionNumber       GetSDKVersionVK(FfxInterface* backendInterface);
 FfxErrorCode           GetEffectGpuMemoryUsageVK(FfxInterface* backendInterface, FfxUInt32 effectContextId, FfxEffectMemoryUsage* outVramUsage);
@@ -1823,9 +1827,17 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                 // individually (VUID-vkFreeDescriptorSets-descriptorPool-00312 without the FREE
                 // bit), and up to 4 sets are allocated (texture/buffer x srv/uav) while
                 // poolSizeCount is at most 3.
+                //
+                // vkfw patch: the bindless sets are written in place after they are bound -- Brixelizer
+                // registers a buffer (ffxBrixelizerRegisterBuffers) while frames that use the set are
+                // still in flight. Without UPDATE_AFTER_BIND and UPDATE_UNUSED_WHILE_PENDING on the
+                // binding that is undefined (VUID-vkUpdateDescriptorSets-None-03047), and the binding
+                // flag needs UPDATE_AFTER_BIND_POOL on the layout and UPDATE_AFTER_BIND on the pool.
+                // The device must enable descriptorBinding*UpdateAfterBind for sampled/storage images
+                // and storage buffers, and descriptorBindingUpdateUnusedWhilePending.
                 descriptorPoolCreateInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
                 descriptorPoolCreateInfo.pNext         = nullptr;
-                descriptorPoolCreateInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+                descriptorPoolCreateInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
                 descriptorPoolCreateInfo.poolSizeCount = poolSizeCount;
                 descriptorPoolCreateInfo.pPoolSizes    = poolSizes;
                 descriptorPoolCreateInfo.maxSets       = 4;
@@ -1842,7 +1854,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutBinding binding = {
                         0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, bindlessConfig->maxTextureSrvs, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
-                    VkDescriptorBindingFlags bindingFlags[] = {VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+                    VkDescriptorBindingFlags bindingFlags[] = {kBindlessBindingFlags};
 
                     VkDescriptorSetLayoutBindingFlagsCreateInfo setLayoutBindingFlags = {};
 
@@ -1853,6 +1865,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
                     layoutInfo.sType                           = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
                     layoutInfo.pNext                           = &setLayoutBindingFlags;
+                    layoutInfo.flags                           = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
@@ -1880,7 +1893,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutBinding binding = {
                         0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bindlessConfig->maxBufferSrvs, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
-                    VkDescriptorBindingFlags bindingFlags[] = {VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+                    VkDescriptorBindingFlags bindingFlags[] = {kBindlessBindingFlags};
 
                     VkDescriptorSetLayoutBindingFlagsCreateInfo setLayoutBindingFlags = {};
 
@@ -1891,6 +1904,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
                     layoutInfo.sType                           = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
                     layoutInfo.pNext                           = &setLayoutBindingFlags;
+                    layoutInfo.flags                           = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
@@ -1917,7 +1931,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutBinding binding = {
                         0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, bindlessConfig->maxTextureUavs, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
-                    VkDescriptorBindingFlags bindingFlags[] = {VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+                    VkDescriptorBindingFlags bindingFlags[] = {kBindlessBindingFlags};
 
                     VkDescriptorSetLayoutBindingFlagsCreateInfo setLayoutBindingFlags = {};
 
@@ -1928,6 +1942,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
                     layoutInfo.sType                           = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
                     layoutInfo.pNext                           = &setLayoutBindingFlags;
+                    layoutInfo.flags                           = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
@@ -1954,7 +1969,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutBinding binding = {
                         0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bindlessConfig->maxBufferUavs, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
-                    VkDescriptorBindingFlags bindingFlags[] = {VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+                    VkDescriptorBindingFlags bindingFlags[] = {kBindlessBindingFlags};
 
                     VkDescriptorSetLayoutBindingFlagsCreateInfo setLayoutBindingFlags = {};
 
@@ -1965,6 +1980,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
                     layoutInfo.sType                           = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
                     layoutInfo.pNext                           = &setLayoutBindingFlags;
+                    layoutInfo.flags                           = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
