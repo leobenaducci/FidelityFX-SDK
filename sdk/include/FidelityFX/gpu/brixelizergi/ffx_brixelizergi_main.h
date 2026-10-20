@@ -1974,14 +1974,14 @@ void FfxBrixelizerGIUpsample(FfxUInt32x2 tid)
 
         if (ffxIsBackground(hi_res_depth))
         {
-            StoreUpsampledDiffuseGI(tid, FfxFloat32x3(0.0f, 0.0f, 0.0f));
+            StoreUpsampledDiffuseGI(tid, FfxFloat32x4(0.0f, 0.0f, 0.0f, 0.0f));
             StoreUpsampledSpecularGI(tid, FfxFloat32x3(0.0f, 0.0f, 0.0f));
             return;
         }
 
         FfxFloat32x3 hi_res_normal = LoadSourceNormal(tid);
 
-        FfxFloat32x3 upsampled_diffuse  = FFX_BROADCAST_FLOAT32X3(0.0f);
+        FfxFloat32x4 upsampled_diffuse  = FFX_BROADCAST_FLOAT32X4(0.0f);	// vkfw: with its alpha, the history count
         FfxFloat32x3 upsampled_specular = FFX_BROADCAST_FLOAT32X3(0.0f);
         FfxFloat32   total_w            = 0.0f;
 

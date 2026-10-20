@@ -134,7 +134,8 @@ FfxFloat32x3 SampleSourcePrevNormal(FfxFloat32x2 uv);
 FfxFloat32   SampleSourceRoughness(FfxFloat32x2 uv);
 FfxFloat32x2 SampleSourceMotionVector(FfxFloat32x2 uv);
 FfxFloat32x3 SampleSourcePrevLitOutput(FfxFloat32x2 uv);
-FfxFloat32x3 SampleDownsampledDiffuseGI(FfxFloat32x2 uv);
+// vkfw: with its alpha, the GI's history count for the pixel, carried to the upsampled output.
+FfxFloat32x4 SampleDownsampledDiffuseGI(FfxFloat32x2 uv);
 FfxFloat32x3 SampleDownsampledSpecularGI(FfxFloat32x2 uv);
 
 void StoreDownsampledDepth(FfxUInt32x2 pixel_coordinate, FfxFloat32 value);
@@ -144,7 +145,7 @@ void StoreDownsampledPrevNormal(FfxUInt32x2 pixel_coordinate, FfxFloat32x3 value
 void StoreDownsampledRoughness(FfxUInt32x2 pixel_coordinate, FfxFloat32 value);
 void StoreDownsampledMotionVector(FfxUInt32x2 pixel_coordinate, FfxFloat32x2 value);
 void StoreDownsampledPrevLitOutput(FfxUInt32x2 pixel_coordinate, FfxFloat32x3 value);
-void StoreUpsampledDiffuseGI(FfxUInt32x2 pixel_coordinate, FfxFloat32x3 value);
+void StoreUpsampledDiffuseGI(FfxUInt32x2 pixel_coordinate, FfxFloat32x4 value);
 void StoreUpsampledSpecularGI(FfxUInt32x2 pixel_coordinate, FfxFloat32x3 value);
 
 FfxBrixelizerContextInfo GetContextInfo();
@@ -1198,9 +1199,9 @@ FfxFloat32x3 SampleSourcePrevLitOutput(FfxFloat32x2 uv)
 #endif
 
 #if defined BRIXELIZER_GI_BIND_SRV_DOWNSAMPLED_DIFFUSE_GI
-FfxFloat32x3 SampleDownsampledDiffuseGI(FfxFloat32x2 uv)
+FfxFloat32x4 SampleDownsampledDiffuseGI(FfxFloat32x2 uv)
 {
-    return textureLod(sampler2D(g_downsampled_diffuse_gi, g_clamp_nearest_sampler), uv, 0.0f).xyz;
+    return textureLod(sampler2D(g_downsampled_diffuse_gi, g_clamp_nearest_sampler), uv, 0.0f);
 }
 #endif
 
@@ -1261,9 +1262,9 @@ void StoreDownsampledPrevLitOutput(FfxUInt32x2 pixel_coordinate, FfxFloat32x3 va
 #endif
 
 #if defined BRIXELIZER_GI_BIND_UAV_UPSAMPLED_DIFFUSE_GI
-void StoreUpsampledDiffuseGI(FfxUInt32x2 pixel_coordinate, FfxFloat32x3 value)
+void StoreUpsampledDiffuseGI(FfxUInt32x2 pixel_coordinate, FfxFloat32x4 value)
 {
-    imageStore(g_upsampled_diffuse_gi, FfxInt32x2(pixel_coordinate), FfxFloat32x4(value, 1.0f));
+    imageStore(g_upsampled_diffuse_gi, FfxInt32x2(pixel_coordinate), value);
 }
 #endif
 
