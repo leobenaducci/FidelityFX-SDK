@@ -144,45 +144,77 @@ void FfxBrixelizerGISHGetCoefficients_ClampedCosine16(FfxFloat32x3 cosine_lobe_d
     coefficients[8] = coefficients[8] * FFX_MIN16_F(FFX_BRIXELIZER_GI_SH_PI_4);
 }
 
+// vkfw patch: a brick's caches are in its slot (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS), not at its index. A brick without one reads as
+// nothing and its writes are dropped.
+#define FFX_BRIXELIZER_GI_INVALID_SLOT 0xffffffffu
+
+FfxUInt32 FfxBrixelizerGICacheSlot(FfxUInt32 brick_id)
+{
+    return LoadBrickSlot(FfxBrixelizerBrickGetIndex(brick_id));
+}
+
+FfxUInt32x4 FfxBrixelizerGILoadBrickSHState(FfxUInt32 brick_id)
+{
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+    return slot == FFX_BRIXELIZER_GI_INVALID_SLOT ? FFX_BROADCAST_UINT32X4(0) : LoadBricksSHState(slot);
+}
+
+void FfxBrixelizerGIStoreBrickSHState(FfxUInt32 brick_id, FfxUInt32x4 value)
+{
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+    if (slot != FFX_BRIXELIZER_GI_INVALID_SLOT)
+        StoreBricksSHState(slot, value);
+}
+
 void FfxBrixelizerGILoadBrickSH(FfxUInt32 brick_id, inout FfxFloat32x4 input_sh[9])
 {
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
     for (FfxInt32 i = 0; i < 9; i++) {
-        input_sh[i] = ffxUnpackF32x2(LoadBricksSH(FfxBrixelizerBrickGetIndex(brick_id) * 9 + i));
+        input_sh[i] = slot == FFX_BRIXELIZER_GI_INVALID_SLOT ? FFX_BROADCAST_FLOAT32X4(0.0) : ffxUnpackF32x2(LoadBricksSH(slot * 9 + i));
     }
 }
 
 void FfxBrixelizerGILoadBrickSH16(FfxUInt32 brick_id, inout FFX_MIN16_F4 input_sh[9])
 {
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
     for (FfxInt32 i = 0; i < 9; i++) {
-        input_sh[i] = FFX_MIN16_F4(ffxUnpackF32x2(LoadBricksSH(FfxBrixelizerBrickGetIndex(brick_id) * 9 + i)));
+        input_sh[i] = slot == FFX_BRIXELIZER_GI_INVALID_SLOT ? FFX_BROADCAST_MIN_FLOAT16X4(FFX_MIN16_F(0.0)) : FFX_MIN16_F4(ffxUnpackF32x2(LoadBricksSH(slot * 9 + i)));
     }
 }
 
 void FfxBrixelizerGIStoreBrickSH(FfxUInt32 brick_id, FfxFloat32x4 input_sh[9])
 {
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+    if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
+        return;
     for (FfxInt32 i = 0; i < 9; i++) {
-        StoreBricksSH(FfxBrixelizerBrickGetIndex(brick_id) * 9 + i, ffxFloat16x4ToUint32x2(FFX_MIN16_F4(input_sh[i])));
+        StoreBricksSH(slot * 9 + i, ffxFloat16x4ToUint32x2(FFX_MIN16_F4(input_sh[i])));
     }
 }
 
 void FfxBrixelizerGILoadBrickDirectSH(FfxUInt32 brick_id, inout FfxFloat32x4 input_sh[9])
 {
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
     for (FfxInt32 i = 0; i < 9; i++) {
-        input_sh[i] = ffxUnpackF32x2(LoadBricksDirectSH(FfxBrixelizerBrickGetIndex(brick_id) * 9 + i));
+        input_sh[i] = slot == FFX_BRIXELIZER_GI_INVALID_SLOT ? FFX_BROADCAST_FLOAT32X4(0.0) : ffxUnpackF32x2(LoadBricksDirectSH(slot * 9 + i));
     }
 }
 
 void FfxBrixelizerGILoadBrickDirectSH16(FfxUInt32 brick_id, inout FFX_MIN16_F4 input_sh[9])
 {
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
     for (FfxInt32 i = 0; i < 9; i++) {
-        input_sh[i] = FFX_MIN16_F4(ffxUnpackF32x2(LoadBricksDirectSH(FfxBrixelizerBrickGetIndex(brick_id) * 9 + i)));
+        input_sh[i] = slot == FFX_BRIXELIZER_GI_INVALID_SLOT ? FFX_BROADCAST_MIN_FLOAT16X4(FFX_MIN16_F(0.0)) : FFX_MIN16_F4(ffxUnpackF32x2(LoadBricksDirectSH(slot * 9 + i)));
     }
 }
 
 void FfxBrixelizerGIStoreBrickDirectSH(FfxUInt32 brick_id, FfxFloat32x4 input_sh[9])
 {
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+    if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
+        return;
     for (FfxInt32 i = 0; i < 9; i++) {
-        StoreBricksDirectSH(FfxBrixelizerBrickGetIndex(brick_id) * 9 + i, ffxFloat16x4ToUint32x2(FFX_MIN16_F4(input_sh[i])));
+        StoreBricksDirectSH(slot * 9 + i, ffxFloat16x4ToUint32x2(FFX_MIN16_F4(input_sh[i])));
     }
 }
 
@@ -198,7 +230,10 @@ FfxFloat32 FfxBrixelizerGIGetVoxelSize(FfxFloat32x3 world_pos, FfxUInt32 g_start
 
 FfxFloat32x3 FfxBrixelizerGISampleRadianceCache(FfxUInt32 brick_id, FfxFloat32x3 uvw)
 {
-    FfxUInt32x3  brick_offset = FfxBrixelizerGetSDFAtlasOffset(brick_id);
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+    if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
+        return FFX_BROADCAST_FLOAT32X3(0.0);
+    FfxUInt32x3  brick_offset = FfxBrixelizerGetSDFAtlasOffset(slot);
     FfxFloat32x3 uvw_min      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(0.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
     FfxFloat32x3 uvw_max      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(3.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
     FfxFloat32x3 sample_uvw   = ffxLerp(uvw_min, uvw_max, ffxSaturate(uvw));
@@ -239,10 +274,14 @@ FfxFloat32x3 FfxBrixelizerGISampleRadianceCache(FfxUInt32 cascade_id, FfxFloat32
 
     if (FfxBrixelizerIsValidID(brick_id)) 
     {
-        FfxUInt32x4  sample_sh_state = LoadBricksSHState(FfxBrixelizerBrickGetIndex(brick_id));
+        const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+        if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
+            return FFX_BROADCAST_FLOAT32X3(0.0);
+
+        FfxUInt32x4  sample_sh_state = LoadBricksSHState(slot);
         FFX_MIN16_F4 sample_dir_w    = FFX_MIN16_F4(ffxUnpackF32x2(sample_sh_state.xy));
 
-        FfxUInt32x3   brick_offset = FfxBrixelizerGetSDFAtlasOffset(brick_id);
+        FfxUInt32x3   brick_offset = FfxBrixelizerGetSDFAtlasOffset(slot);
         FfxFloat32x3  uvw_min      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(0.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
         FfxFloat32x3  uvw_max      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(3.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
         uvw                        = ffxLerp(uvw_min, uvw_max, ffxSaturate(uvw));
@@ -472,7 +511,7 @@ void FfxBrixelizerGIEmitIrradiance(FfxFloat32x3 world_pos, FfxFloat32x3 probe_di
                 FfxBrixelizerGILoadBrickSH(brick_id, /* inout */ src_sh);
                 FfxFloat32 num_samples = ffxMin(max_num_samples, src_sh[0].w);
 
-                FfxUInt32x4  sh_state = LoadBricksSHState(FfxBrixelizerBrickGetIndex(brick_id));
+                FfxUInt32x4  sh_state = FfxBrixelizerGILoadBrickSHState(brick_id);
                 FFX_MIN16_F4 dir_w    = FFX_MIN16_F4(ffxUnpackF32x2(sh_state.xy));
                 if (any(isinf(dir_w)) || any(isnan(dir_w)))
                     dir_w = FFX_BROADCAST_MIN_FLOAT16X4(FFX_MIN16_F(0.0));
@@ -496,7 +535,7 @@ void FfxBrixelizerGIEmitIrradiance(FfxFloat32x3 world_pos, FfxFloat32x3 probe_di
                 dir_w.xyz = normalize(ffxLerp(FFX_MIN16_F3(probe_direction), dir_w.xyz, FFX_MIN16_F(weight)));
 
                 sh_state.xy = ffxFloat16x4ToUint32x2(dir_w);
-                StoreBricksSHState(FfxBrixelizerBrickGetIndex(brick_id), sh_state);
+                FfxBrixelizerGIStoreBrickSHState(brick_id, sh_state);
 
                 FfxBrixelizerGIStoreBrickSH(brick_id, shs);
             }
@@ -524,7 +563,10 @@ FfxInt32x3 FfxBrixelizerGIPickMajorDir(FfxFloat32x3 r)
 
 void FfxBrixelizerGIEmitRadiance(FfxUInt32 brick_id, FfxFloat32x3 uvw, FfxFloat32x3 direction, FfxFloat32x3 radiance, FfxFloat32 weight)
 {
-    FfxUInt32x3      brick_offset = FfxBrixelizerGetSDFAtlasOffset(brick_id) / 2;
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+    if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
+        return;
+    FfxUInt32x3      brick_offset = FfxBrixelizerGetSDFAtlasOffset(slot) / 2;
     FfxInt32x3       coord        = FfxInt32x3(ffxSaturate(uvw) * FfxFloat32(4.0));
     FfxFloat32x3     src          = LoadRadianceCache(brick_offset + coord);
     const FfxFloat32 EPS          = FfxFloat32(1.0e-6);

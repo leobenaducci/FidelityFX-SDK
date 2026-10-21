@@ -30,6 +30,8 @@
 
 #define BRIXELIZER_BIND_SRV_CASCADE_BRICK_MAPS               0
 
+#define BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP                500
+
 #define BRIXELIZER_GI_BIND_UAV_BRICKS_SH                     2000
 #define BRIXELIZER_GI_BIND_UAV_BRICKS_SH_STATE               2001
 

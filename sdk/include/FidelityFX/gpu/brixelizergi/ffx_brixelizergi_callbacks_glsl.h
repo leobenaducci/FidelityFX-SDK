@@ -157,6 +157,7 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID);
 FfxFloat32 SampleSDFAtlas(FfxFloat32x3 uvw);
 FfxUInt32 LoadContextCounter(FfxUInt32 elementIdx);
 FfxUInt32 LoadBricksClearList(FfxUInt32 elementIdx);
+FfxUInt32 LoadBrickSlot(FfxUInt32 brick_index);
 FfxFloat32x3 LoadCascadeAABBTreesFloat3(FfxUInt32 cascadeID, FfxUInt32 elementIndex);
 FfxUInt32 LoadCascadeAABBTreesUInt(FfxUInt32 cascadeID, FfxUInt32 elementIndex);
 FfxUInt32 LoadBricksVoxelMap(FfxUInt32 elementIndex);
@@ -464,6 +465,13 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
 	} r_bctx_bricks_aabb;
 #endif 
 
+#if defined BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP, std430) readonly buffer BrixelizerGIBrickSlotMap_t
+    {
+        FfxUInt32 data[];
+    } g_bctx_brick_slot_map;
+#endif
+
 #if defined BRIXELIZER_BIND_SRV_CONTEXT_BRICKS_VOXEL_MAP
     layout (set = 0, binding = BRIXELIZER_BIND_SRV_CONTEXT_BRICKS_VOXEL_MAP, std430) readonly buffer BrixelizerVoxelMap_t
     {
@@ -520,6 +528,16 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID)
     return g_bx_context_info.data.cascades[nonuniformEXT(cascadeID)];
 }
 #endif
+
+// The slot of the cache a brick reads and writes (0xffffffff: none). A pass that does not bind the slot map touches no cache.
+FfxUInt32 LoadBrickSlot(FfxUInt32 brick_index)
+{
+#if defined BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP
+    return g_bctx_brick_slot_map.data[brick_index];
+#else
+    return brick_index;
+#endif
+}
 
 #if defined BRIXELIZER_BIND_SRV_SDF_ATLAS
 FfxFloat32 SampleSDFAtlas(FfxFloat32x3 uvw)

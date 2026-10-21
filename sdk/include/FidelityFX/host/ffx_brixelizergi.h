@@ -90,7 +90,8 @@ typedef enum FfxBrixelizerGIFlags
     FFX_BRIXELIZER_GI_FLAG_DISABLE_SPECULAR = (1 << 1),  ///< Disable specular GI.
     FFX_BRIXELIZER_GI_FLAG_DISABLE_DENOISER = (1 << 2),  ///< Disable denoising. Only allowed at native resolution.
     FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE = (1 << 3),  ///< The radiance cache is the application's (radianceCache in the dispatch and debug descriptions), not created by the context.
-    FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE    = (1 << 4),  ///< The per-brick irradiance (bricksSH, bricksDirectSH, bricksSHState in the dispatch and debug descriptions) is the application's, and so is clearing a new brick's cache: the context's clear pass does not run. Requires FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE.
+    FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS             = (1 << 5),  ///< vkfw patch: the per-brick caches are indexed through brickSlotMap (the dispatch and debug descriptions) instead of by brick index, so a brick can keep, take over or lose a cache as the application's bricks come and go. Requires FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE. Without it the context uses an identity map of its own.
+    FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE    = (1 << 4),///< The per-brick irradiance (bricksSH, bricksDirectSH, bricksSHState in the dispatch and debug descriptions) is the application's, and so is clearing a new brick's cache: the context's clear pass does not run. Requires FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE.
 } FfxBrixelizerGIFlags;
 
 /// An enumeration of the quality modes supported by FidelityFX Brixelizer GI.
@@ -166,6 +167,7 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource bricksSH;                   ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, a brick's L2 SH irradiance (fp16x4 per coefficient).
     FfxResource bricksDirectSH;             ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, the direct part of the same.
     FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32x4.
+    FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none.
 
     /// vkfw patch: optional, a R16G16B16A16_FLOAT UAV of ffxBrixelizerGIGetInternalSize() whose .x receives the sky visibility the screen probes'
     /// rays saw, as 0 to 1 (1 = open sky) for the surface under each pixel; .w is 1. Leave it null (its FfxResource zero-initialised) to skip the
@@ -213,6 +215,7 @@ typedef struct FfxBrixelizerGIDebugDescription
     FfxResource bricksSH;                   ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, a brick's L2 SH irradiance (fp16x4 per coefficient).
     FfxResource bricksDirectSH;             ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, the direct part of the same.
     FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32x4.
+    FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none.
 
     FfxBrixelizerRawContext* brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDebugDescription;

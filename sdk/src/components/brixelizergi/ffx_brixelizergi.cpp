@@ -45,7 +45,8 @@ static const ResourceBinding srvResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_SCREEN_PROBES_READ, L"g_sdfgi_r_static_screen_probes"},
     {FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_SPECULAR_TARGET_READ, L"g_sdfgi_r_specular_target"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE, L"g_bctx_radiance_cache"},
-    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_ENVIRONMENT_MAP, L"g_environment_map"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP, L"g_bctx_brick_slot_map"},
+{FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_ENVIRONMENT_MAP, L"g_environment_map"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_PREV_LIT_OUTPUT, L"g_prev_lit_output"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_DEPTH, L"g_depth"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_HISTORY_DEPTH, L"g_history_depth"},
@@ -818,8 +819,10 @@ static bool brixelizerGIIsExternalResource(uint32_t flags, uint32_t resourceId)
 {
     if ((flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE) && resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE)
         return true;
+    if ((flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS) && resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP)
+        return true;
     if ((flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE) &&
-        (resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH || resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_DIRECT_SH ||
+        (resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH|| resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_DIRECT_SH ||
          resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICKS_SH_STATE))
         return true;
     return false;
@@ -827,9 +830,11 @@ static bool brixelizerGIIsExternalResource(uint32_t flags, uint32_t resourceId)
 
 // vkfw: register the application's caches in place of the internal resources they replace.
 static void brixelizerGIRegisterExternalResources(FfxBrixelizerGIContext_Private* pContext, const FfxResource* radianceCache,
-    const FfxResource* bricksSH, const FfxResource* bricksDirectSH, const FfxResource* bricksSHState)
+    const FfxResource* bricksSH, const FfxResource* bricksDirectSH, const FfxResource* bricksSHState, const FfxResource* brickSlotMap)
 {
     FfxInterface& backend = pContext->contextDescription.backendInterface;
+    if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS)
+        backend.fpRegisterResource(&backend, brickSlotMap, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP]);
     if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE)
         backend.fpRegisterResource(&backend, radianceCache, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE]);
     if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE)
@@ -1107,6 +1112,15 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
              sizeof(FfxUInt32x2),
              1,
              FFX_RESOURCE_FLAGS_NONE},
+            {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP,
+             L"BrixelizerGI_BrickSlotMap",
+             FFX_RESOURCE_TYPE_BUFFER,
+             FFX_RESOURCE_USAGE_UAV,
+             FFX_SURFACE_FORMAT_R32_FLOAT,
+             FFX_BRIXELIZER_MAX_BRICKS * sizeof(FfxUInt32),
+             sizeof(FfxUInt32),
+             1,
+             FFX_RESOURCE_FLAGS_NONE},
             {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RAY_SWAP_INDIRECT_ARGS,
              L"BrixelizerGI_RaySwapIndirectArgs",
              FFX_RESOURCE_TYPE_BUFFER,
@@ -1139,7 +1153,18 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
 
             FfxResourceStates initialState = (currentSurfaceDescription->usage == FFX_RESOURCE_USAGE_READ_ONLY) ? FFX_RESOURCE_STATE_COMPUTE_READ : FFX_RESOURCE_STATE_UNORDERED_ACCESS;
 
-            const FfxCreateResourceDescription createResourceDescription = { FFX_HEAP_TYPE_DEFAULT, resourceDescription, initialState, currentSurfaceDescription->name, currentSurfaceDescription->id, initData};
+            // vkfw patch: the identity brick -> slot map of a context whose caches are indexed by brick (copied while the resource is created).
+            FfxResourceInitData entryInitData = initData;
+            FfxUInt32*          identityMap   = NULL;
+            if (currentSurfaceDescription->id == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP)
+            {
+                identityMap = (FfxUInt32*)malloc(FFX_BRIXELIZER_MAX_BRICKS * sizeof(FfxUInt32));
+                for (FfxUInt32 i = 0; i < FFX_BRIXELIZER_MAX_BRICKS; ++i)
+                    identityMap[i] = i;
+                entryInitData = {FFX_RESOURCE_INIT_DATA_TYPE_BUFFER, FFX_BRIXELIZER_MAX_BRICKS * sizeof(FfxUInt32), identityMap};
+            }
+
+            const FfxCreateResourceDescription createResourceDescription = { FFX_HEAP_TYPE_DEFAULT, resourceDescription, initialState, currentSurfaceDescription->name, currentSurfaceDescription->id, entryInitData};
 
             memset(&pContext->resources[currentSurfaceDescription->id], 0, sizeof(FfxResourceInternal));
 
@@ -1147,6 +1172,7 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
                                                                                         &createResourceDescription,
                                                                                         pContext->effectContextId,
                                                                                         &pContext->resources[currentSurfaceDescription->id]));
+            free(identityMap);
         }
     }
     
@@ -1426,7 +1452,7 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
     brixelizerGIRegisterExternalResources(pContext, &pDispatchDescription->radianceCache, &pDispatchDescription->bricksSH,
-                                          &pDispatchDescription->bricksDirectSH, &pDispatchDescription->bricksSHState);
+                                          &pDispatchDescription->bricksDirectSH, &pDispatchDescription->bricksSHState, &pDispatchDescription->brickSlotMap);
 
     // vkfw patch: the sky visibility target, or, while there is none, the interpolation's debug target standing in for the binding it
     // declares anyway (the shaders only write it with sky_visibility_enabled).
@@ -1874,7 +1900,7 @@ static FfxErrorCode brixelizerGIDebugVisualization(FfxBrixelizerGIContext_Privat
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
     brixelizerGIRegisterExternalResources(pContext, &pDebugDescription->radianceCache, &pDebugDescription->bricksSH,
-                                          &pDebugDescription->bricksDirectSH, &pDebugDescription->bricksSHState);
+                                          &pDebugDescription->bricksDirectSH, &pDebugDescription->bricksSHState, &pDebugDescription->brickSlotMap);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDebugDescription->bricksAABBs,
                                                                      pContext->effectContextId,

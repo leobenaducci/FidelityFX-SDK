@@ -104,9 +104,11 @@ void FfxBrixelizerGIClearCache(FfxUInt32x3 tid)
             shs[j] = FFX_BROADCAST_FLOAT32X4(0.0);
         FfxBrixelizerGIStoreBrickSH(brick_id, shs);
         FfxBrixelizerGIStoreBrickDirectSH(brick_id, shs);
-        StoreBricksSHState(FfxBrixelizerBrickGetIndex(brick_id), FFX_BROADCAST_UINT32X4(0));
+        FfxBrixelizerGIStoreBrickSHState(brick_id, FFX_BROADCAST_UINT32X4(0));
     }
-    StoreRadianceCache(FfxBrixelizerGetSDFAtlasOffset(brick_id) / 2 + local_coord, FfxFloat32x3(0.0, 0.0, 0.0));
+    const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
+    if (slot != FFX_BRIXELIZER_GI_INVALID_SLOT)
+        StoreRadianceCache(FfxBrixelizerGetSDFAtlasOffset(slot) / 2 + local_coord, FfxFloat32x3(0.0, 0.0, 0.0));
 }
 
 void FfxBrixelizerGIPropagateSH(FfxUInt32x3 tid)
@@ -126,7 +128,7 @@ void FfxBrixelizerGIPropagateSH(FfxUInt32x3 tid)
         base_sh[j] *= weight_acc;
     FfxInt32 next_cascade_idx = -1;
 
-    FfxUInt32x4  sh_state = LoadBricksSHState(FfxBrixelizerBrickGetIndex(base_brick_id));
+    FfxUInt32x4  sh_state = FfxBrixelizerGILoadBrickSHState(base_brick_id);
     FFX_MIN16_F4 dir_w    = FFX_MIN16_F4(ffxUnpackF32x2(sh_state.xy));
 
     if (next_cascade_idx == -1) 
@@ -150,7 +152,7 @@ void FfxBrixelizerGIPropagateSH(FfxUInt32x3 tid)
                     if (FfxBrixelizerIsInvalidID(sample_brick_id))
                         continue;
 
-                    FfxUInt32x4  sample_sh_state = LoadBricksSHState(FfxBrixelizerBrickGetIndex(sample_brick_id));
+                    FfxUInt32x4  sample_sh_state = FfxBrixelizerGILoadBrickSHState(sample_brick_id);
                     FFX_MIN16_F4 sample_dir_w    = FFX_MIN16_F4(ffxUnpackF32x2(sample_sh_state.xy));
 
                     if (dot(sample_dir_w.xyz, dir_w.xyz) < FFX_MIN16_F(0.0))

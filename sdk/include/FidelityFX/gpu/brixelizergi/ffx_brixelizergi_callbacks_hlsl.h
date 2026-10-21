@@ -157,6 +157,7 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID);
 FfxFloat32 SampleSDFAtlas(FfxFloat32x3 uvw);
 FfxUInt32 LoadContextCounter(FfxUInt32 elementIdx);
 FfxUInt32 LoadBricksClearList(FfxUInt32 elementIdx);
+FfxUInt32 LoadBrickSlot(FfxUInt32 brick_index);
 FfxFloat32x3 LoadCascadeAABBTreesFloat3(FfxUInt32 cascadeID, FfxUInt32 elementIndex);
 FfxUInt32 LoadCascadeAABBTreesUInt(FfxUInt32 cascadeID, FfxUInt32 elementIndex);
 FfxUInt32 LoadBricksVoxelMap(FfxUInt32 elementIndex);
@@ -444,6 +445,10 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
     StructuredBuffer<FfxUInt32>        r_bctx_bricks_aabb : FFX_BRIXELIZER_DECLARE_SRV(BRIXELIZER_BIND_SRV_CONTEXT_BRICKS_AABB);
 #endif 
 
+#if defined BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP
+    StructuredBuffer<FfxUInt32>        g_bctx_brick_slot_map : FFX_BRIXELIZER_DECLARE_SRV(BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP);
+#endif
+
 #if defined BRIXELIZER_BIND_SRV_CONTEXT_BRICKS_VOXEL_MAP
     StructuredBuffer<FfxUInt32>        r_bctx_bricks_voxel_map : FFX_BRIXELIZER_DECLARE_SRV(BRIXELIZER_BIND_SRV_CONTEXT_BRICKS_VOXEL_MAP);
 #endif
@@ -512,6 +517,15 @@ FfxUInt32 LoadContextCounter(FfxUInt32 elementIdx)
 #endif
 
 #if defined BRIXELIZER_BIND_SRV_CONTEXT_BRICKS_CLEAR_LIST
+FfxUInt32 LoadBrickSlot(FfxUInt32 brick_index)
+{
+#if defined BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP
+    return g_bctx_brick_slot_map[brick_index];
+#else
+    return brick_index;
+#endif
+}
+
 FfxUInt32 LoadBricksClearList(FfxUInt32 elementIdx)
 {
     return r_bctx_bricks_clear_list[elementIdx];
