@@ -98,6 +98,44 @@ struct FfxBrixelizerGIPassConstants
     FfxUInt32x2 _padding;
 };
 
+// vkfw patch: FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS. A body that moved since a cascade's last bake: a voxel of it inside the bounds was, then, at the
+// point the 3x4 row-major transform takes it to.
+#define FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS 512
+
+struct FfxBrixelizerGISlotMover
+{
+    FfxFloat32x4 transform_row0;
+    FfxFloat32x4 transform_row1;
+    FfxFloat32x4 transform_row2;
+    FfxFloat32x4 bounds_min;
+    FfxFloat32x4 bounds_max;
+};
+
+struct FfxBrixelizerGISlotConstants
+{
+    FfxUInt32    cascade_index;          // the merged cascade (physical index) the bake rebuilt
+    FfxUInt32    level_index;            // its level: startCascade-relative
+    FfxUInt32    previous_valid;         // the cascade's slot map holds it as it was before the bake
+    FfxUInt32    carry;                  // a brick keeps its voxel's cache; 0 gives every brick a new slot, zeroed
+
+    FfxFloat32x3 previous_grid_min;      // the cascade's placement before the bake
+    FfxFloat32   previous_voxel_size;
+    FfxUInt32x3  previous_clipmap_offset;
+    FfxUInt32    num_movers;
+
+    FfxUInt32    coarser_cascade_index;  // the next coarser merged cascade to seed from; 0xffffffff for none
+    FfxFloat32   seed_samples;           // the sample count a seeded brick's irradiance is given
+    FfxUInt32    seed_radiance;          // seed the radiance too
+    FfxFloat32   seed_min_samples;       // the samples a coarser brick needs before a new one is seeded from it
+
+    FfxUInt32    claim_tag;              // this bake's: a slot whose claim is it was claimed by a brick of this bake
+    FfxUInt32    _padding0;
+    FfxUInt32    _padding1;
+    FfxUInt32    _padding2;
+
+    FfxBrixelizerGISlotMover movers[FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS];
+};
+
 struct FfxBrixelizerGIScalingConstants
 {
     FfxUInt32x2 sourceSize;

@@ -118,12 +118,24 @@
 // vkfw patch: brick -> cache slot (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: the application's; otherwise an identity map the context makes)
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP                       119
 
-#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                120
+// vkfw patch: what FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS keeps: the free slots, each slot's claim this bake, each merged cascade's slot per
+// voxel, the slot each voxel of the cascade being rebuilt got, the slots to fill, and the application's counters.
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_STATE                           120
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_CLAIM                           121
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_FREE_LIST                       122
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_LEVEL_SLOT_MAPS                      123
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_NEW_SLOTS                            124
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST                            125
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_COUNTERS                        126
+
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                127
 
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_GI_CONSTANTS                    0
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_PASS_CONSTANTS                  1
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_SCALING_CONSTANTS               2
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_CONTEXT_INFO                    3
+#define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_SLOT_CONSTANTS                  4
+#define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_COUNT                           5
 
 #endif  // #if defined(FFX_CPU) || defined(FFX_GPU)
 

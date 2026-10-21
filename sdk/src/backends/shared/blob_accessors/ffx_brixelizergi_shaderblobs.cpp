@@ -36,6 +36,13 @@
 #include <ffx_brixelizergi_prepare_clear_cache_permutations.h>
 #include <ffx_brixelizergi_project_screen_probes_permutations.h>
 #include <ffx_brixelizergi_propagate_sh_permutations.h>
+#include <ffx_brixelizergi_slots_claim_same_permutations.h>
+#include <ffx_brixelizergi_slots_claim_mover_permutations.h>
+#include <ffx_brixelizergi_slots_free_permutations.h>
+#include <ffx_brixelizergi_slots_alloc_permutations.h>
+#include <ffx_brixelizergi_slots_apply_permutations.h>
+#include <ffx_brixelizergi_slots_seed_permutations.h>
+#include <ffx_brixelizergi_slots_stats_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_permutations.h>
@@ -56,6 +63,13 @@
 #include <ffx_brixelizergi_prepare_clear_cache_wave64_permutations.h>
 #include <ffx_brixelizergi_project_screen_probes_wave64_permutations.h>
 #include <ffx_brixelizergi_propagate_sh_wave64_permutations.h>
+#include <ffx_brixelizergi_slots_claim_same_wave64_permutations.h>
+#include <ffx_brixelizergi_slots_claim_mover_wave64_permutations.h>
+#include <ffx_brixelizergi_slots_free_wave64_permutations.h>
+#include <ffx_brixelizergi_slots_alloc_wave64_permutations.h>
+#include <ffx_brixelizergi_slots_apply_wave64_permutations.h>
+#include <ffx_brixelizergi_slots_seed_wave64_permutations.h>
+#include <ffx_brixelizergi_slots_stats_wave64_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_wave64_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_wave64_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_wave64_permutations.h>
@@ -76,6 +90,13 @@
 #include <ffx_brixelizergi_prepare_clear_cache_16bit_permutations.h>
 #include <ffx_brixelizergi_project_screen_probes_16bit_permutations.h>
 #include <ffx_brixelizergi_propagate_sh_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_claim_same_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_claim_mover_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_free_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_alloc_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_apply_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_seed_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_stats_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_16bit_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_16bit_permutations.h>
@@ -96,6 +117,13 @@
 #include <ffx_brixelizergi_prepare_clear_cache_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_project_screen_probes_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_propagate_sh_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_claim_same_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_claim_mover_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_free_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_alloc_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_apply_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_seed_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_slots_stats_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_wave64_16bit_permutations.h>
@@ -444,6 +472,237 @@ static FfxShaderBlob brixelizerGIGetPropagateSHPassPermutationByIndex(uint32_t p
         {
             const int32_t tableIndex = g_ffx_brixelizergi_propagate_sh_IndirectionTable[key.index];
             return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_propagate_sh_PermutationInfo, tableIndex);
+        }
+    }
+}
+
+static FfxShaderBlob brixelizerGIGetSlotsClaimSamePassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_slots_claim_same_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_same_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_same_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_same_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_same_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_same_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_same_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_same_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_same_PermutationInfo, tableIndex);
+        }
+    }
+}
+
+static FfxShaderBlob brixelizerGIGetSlotsClaimMoverPassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_slots_claim_mover_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_mover_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_mover_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_mover_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_mover_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_mover_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_mover_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_claim_mover_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_claim_mover_PermutationInfo, tableIndex);
+        }
+    }
+}
+
+static FfxShaderBlob brixelizerGIGetSlotsFreePassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_slots_free_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_free_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_free_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_free_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_free_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_free_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_free_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_free_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_free_PermutationInfo, tableIndex);
+        }
+    }
+}
+
+static FfxShaderBlob brixelizerGIGetSlotsAllocPassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_slots_alloc_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_alloc_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_alloc_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_alloc_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_alloc_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_alloc_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_alloc_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_alloc_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_alloc_PermutationInfo, tableIndex);
+        }
+    }
+}
+
+static FfxShaderBlob brixelizerGIGetSlotsApplyPassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_slots_apply_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_apply_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_apply_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_apply_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_apply_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_apply_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_apply_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_apply_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_apply_PermutationInfo, tableIndex);
+        }
+    }
+}
+
+static FfxShaderBlob brixelizerGIGetSlotsSeedPassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_slots_seed_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_seed_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_seed_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_seed_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_seed_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_seed_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_seed_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_seed_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_seed_PermutationInfo, tableIndex);
+        }
+    }
+}
+
+static FfxShaderBlob brixelizerGIGetSlotsStatsPassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_slots_stats_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_stats_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_stats_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_stats_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_stats_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_stats_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_stats_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_slots_stats_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_slots_stats_PermutationInfo, tableIndex);
         }
     }
 }
@@ -812,6 +1071,48 @@ FfxErrorCode brixelizerGIGetPermutationBlobByIndex(
         case FFX_BRIXELIZER_GI_PASS_PROPAGATE_SH:
         {
             FfxShaderBlob blob = brixelizerGIGetPropagateSHPassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_SLOTS_CLAIM_SAME:
+        {
+            FfxShaderBlob blob = brixelizerGIGetSlotsClaimSamePassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_SLOTS_CLAIM_MOVER:
+        {
+            FfxShaderBlob blob = brixelizerGIGetSlotsClaimMoverPassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_SLOTS_FREE:
+        {
+            FfxShaderBlob blob = brixelizerGIGetSlotsFreePassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_SLOTS_ALLOC:
+        {
+            FfxShaderBlob blob = brixelizerGIGetSlotsAllocPassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_SLOTS_APPLY:
+        {
+            FfxShaderBlob blob = brixelizerGIGetSlotsApplyPassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_SLOTS_SEED:
+        {
+            FfxShaderBlob blob = brixelizerGIGetSlotsSeedPassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_SLOTS_STATS:
+        {
+            FfxShaderBlob blob = brixelizerGIGetSlotsStatsPassPermutationByIndex(permutationOptions, isWave64, is16bit);
             memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
             return FFX_OK;
         }

@@ -50,7 +50,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup ffxBrixgi
-#define FFX_BRIXELIZER_GI_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(210000)
+#define FFX_BRIXELIZER_GI_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(320000)
 
 /// FidelityFX Brixelizer GI context count
 /// 
@@ -90,7 +90,7 @@ typedef enum FfxBrixelizerGIFlags
     FFX_BRIXELIZER_GI_FLAG_DISABLE_SPECULAR = (1 << 1),  ///< Disable specular GI.
     FFX_BRIXELIZER_GI_FLAG_DISABLE_DENOISER = (1 << 2),  ///< Disable denoising. Only allowed at native resolution.
     FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE = (1 << 3),  ///< The radiance cache is the application's (radianceCache in the dispatch and debug descriptions), not created by the context.
-    FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS             = (1 << 5),  ///< vkfw patch: the per-brick caches are indexed through brickSlotMap (the dispatch and debug descriptions) instead of by brick index, so a brick can keep, take over or lose a cache as the application's bricks come and go. Requires FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE. Without it the context uses an identity map of its own.
+    FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS             = (1 << 5),  ///< vkfw patch: the per-brick caches are indexed through brickSlotMap (the dispatch and debug descriptions) instead of by brick index, and the context keeps the map: after a bake of a merged cascade (updatedCascadeMask) a brick keeps the slot its voxel had, or on a moved body (movers) the one at the point its motion takes the voxel back to; the slots nobody claimed are freed, and a brick still without one takes a free slot, which is seeded from the next coarser cascade or zeroed. Requires FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE, and brickSlotMap filled with 0xffffffff when it is first handed in. Without it the context uses an identity map of its own.
     FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE    = (1 << 4),///< The per-brick irradiance (bricksSH, bricksDirectSH, bricksSHState in the dispatch and debug descriptions) is the application's, and so is clearing a new brick's cache: the context's clear pass does not run. Requires FFX_BRIXELIZER_GI_FLAG_EXTERNAL_RADIANCE_CACHE.
 } FfxBrixelizerGIFlags;
 
@@ -116,6 +116,22 @@ typedef struct FfxBrixelizerGIContextDescription
     FfxDimensions2D                   displaySize;        ///< The size of the presentation resolution targeted by the upscaling process.
     FfxInterface                      backendInterface;   ///< An implementation of the FidelityFX backend for use with Brixelizer.
 } FfxBrixelizerGIContextDescription;
+
+/// vkfw patch: what FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS may do.
+typedef enum FfxBrixelizerGICacheFlags
+{
+    FFX_BRIXELIZER_GI_CACHE_CARRY        = (1 << 0),  ///< A brick keeps its voxel's cache; without, every brick gets a new slot, zeroed.
+    FFX_BRIXELIZER_GI_CACHE_SEED_COARSER = (1 << 1),  ///< A new brick is seeded from the next coarser cascade's brick there.
+    FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE = (1 << 2), ///< The seed fills the radiance cache too.
+} FfxBrixelizerGICacheFlags;
+
+/// vkfw patch: a body that moved since a merged cascade's last bake: a voxel of it inside the bounds was, then, at the point the transform takes it to.
+typedef struct FfxBrixelizerGIMover
+{
+    float currentToPrevious[12];            ///< 3x4, row-major.
+    float boundsMin[3];                     ///< The body's world bounds now.
+    float boundsMax[3];
+} FfxBrixelizerGIMover;
 
 /// A structure encapsulating the parameters used for computing a dispatch by the
 /// Brixelizer GI context.
@@ -167,13 +183,23 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource bricksSH;                   ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, a brick's L2 SH irradiance (fp16x4 per coefficient).
     FfxResource bricksDirectSH;             ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, the direct part of the same.
     FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32x4.
-    FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none.
+    FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none. Written by the context.
+    FfxResource slotCounters;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: 64 FfxUInt32, zeroed by the application before each dispatch with an updatedCascadeMask; the context counts into it (the first 32 are statistics: see ffx_brixelizergi_cache_slots.h).
 
     /// vkfw patch: optional, a R16G16B16A16_FLOAT UAV of ffxBrixelizerGIGetInternalSize() whose .x receives the sky visibility the screen probes'
     /// rays saw, as 0 to 1 (1 = open sky) for the surface under each pixel; .w is 1. Leave it null (its FfxResource zero-initialised) to skip the
     /// work. Taken from the rays the GI traces anyway: a ray that left the scene without a hit counts as sky, so it knows nothing of what the
     /// TLAS or a celestial body would add, and the rays only reach tMax. Written at the GI's internal resolution (not upsampled).
     FfxResource skyVisibility;
+
+    /// vkfw patch, with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: what the bake before this dispatch did to the merged cascades. Bit i is merged cascade
+    /// startCascade + i, rebuilt by that bake (normally one a frame, or none).
+    uint32_t updatedCascadeMask;
+    uint32_t cacheFlags;                    ///< FfxBrixelizerGICacheFlags
+    float    seedSamples;                   ///< The sample count a seeded brick's irradiance is given, so its own samples soon outweigh it (2).
+    float    seedMinSamples;                ///< The samples a coarser brick needs before a new one is seeded from it (4).
+    const FfxBrixelizerGIMover* movers;     ///< Bodies that moved since the updated cascade's last bake, at most FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS.
+    uint32_t numMovers;
 
     FfxBrixelizerRawContext *brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDispatchDescription;
@@ -215,7 +241,8 @@ typedef struct FfxBrixelizerGIDebugDescription
     FfxResource bricksSH;                   ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, a brick's L2 SH irradiance (fp16x4 per coefficient).
     FfxResource bricksDirectSH;             ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, the direct part of the same.
     FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32x4.
-    FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none.
+    FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none. Written by the context.
+    FfxResource slotCounters;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: 64 FfxUInt32, zeroed by the application before each dispatch with an updatedCascadeMask; the context counts into it (the first 32 are statistics: see ffx_brixelizergi_cache_slots.h).
 
     FfxBrixelizerRawContext* brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDebugDescription;
@@ -242,7 +269,14 @@ typedef enum FfxBrixelizerGIPass
     FFX_BRIXELIZER_GI_PASS_PREPARE_CLEAR_CACHE,
     FFX_BRIXELIZER_GI_PASS_PROJECT_SCREEN_PROBES,
     FFX_BRIXELIZER_GI_PASS_PROPAGATE_SH,
-    FFX_BRIXELIZER_GI_PASS_REPROJECT_GI,
+    FFX_BRIXELIZER_GI_PASS_SLOTS_CLAIM_SAME,    ///< vkfw patch: the passes of FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS
+    FFX_BRIXELIZER_GI_PASS_SLOTS_CLAIM_MOVER,
+    FFX_BRIXELIZER_GI_PASS_SLOTS_FREE,
+    FFX_BRIXELIZER_GI_PASS_SLOTS_ALLOC,
+    FFX_BRIXELIZER_GI_PASS_SLOTS_APPLY,
+    FFX_BRIXELIZER_GI_PASS_SLOTS_SEED,
+    FFX_BRIXELIZER_GI_PASS_SLOTS_STATS,
+FFX_BRIXELIZER_GI_PASS_REPROJECT_GI,
     FFX_BRIXELIZER_GI_PASS_REPROJECT_SCREEN_PROBES,
     FFX_BRIXELIZER_GI_PASS_SPAWN_SCREEN_PROBES,
     FFX_BRIXELIZER_GI_PASS_SPECULAR_PRE_TRACE,

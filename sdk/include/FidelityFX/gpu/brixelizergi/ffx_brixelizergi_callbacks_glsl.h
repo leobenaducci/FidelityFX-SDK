@@ -181,6 +181,13 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
 	} g_pass_constants;
 #endif
 
+#if defined BRIXELIZER_GI_BIND_CB_SLOT_CONSTANTS
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_CB_SLOT_CONSTANTS, std140) uniform SlotConstants_t
+    {
+        FfxBrixelizerGISlotConstants data;
+    } g_slot_constants;
+#endif
+
 #if defined BRIXELIZER_GI_BIND_CB_SCALING_CONSTANTS
     layout (set = 0, binding = BRIXELIZER_GI_BIND_CB_SCALING_CONSTANTS, std140) uniform ScalingConstants_t
     {
@@ -527,6 +534,59 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID)
 {
     return g_bx_context_info.data.cascades[nonuniformEXT(cascadeID)];
 }
+#endif
+
+// vkfw patch: the buffers of FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS (ffx_brixelizergi_cache_slots.h). The two maps the passes keep per
+// voxel store a slot plus one, so that zero-filled memory reads as no slot; the brick -> slot map stores the slot itself, and
+// 0xffffffff for none.
+#if defined BRIXELIZER_GI_BIND_UAV_SLOT_STATE
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SLOT_STATE, std430) coherent buffer BrixelizerGISlotState_t { FfxUInt32 data[]; } g_rw_slot_state;
+    FfxUInt32 SlotStateAdd(FfxUInt32 index, FfxUInt32 value) { return atomicAdd(g_rw_slot_state.data[index], value); }
+    FfxUInt32 SlotStateCompareSwap(FfxUInt32 index, FfxUInt32 compare, FfxUInt32 value) { return atomicCompSwap(g_rw_slot_state.data[index], compare, value); }
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_SLOT_CLAIM
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SLOT_CLAIM, std430) coherent buffer BrixelizerGISlotClaim_t { FfxUInt32 data[]; } g_rw_slot_claim;
+    FfxUInt32 SlotClaimExchange(FfxUInt32 slot, FfxUInt32 tag) { return atomicExchange(g_rw_slot_claim.data[slot], tag); }
+    FfxUInt32 SlotClaimLoad(FfxUInt32 slot) { return g_rw_slot_claim.data[slot]; }
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_SLOT_FREE_LIST
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SLOT_FREE_LIST, std430) coherent buffer BrixelizerGISlotFreeList_t { FfxUInt32 data[]; } g_rw_slot_free_list;
+    FfxUInt32 SlotFreeListLoad(FfxUInt32 index) { return g_rw_slot_free_list.data[index]; }
+    void SlotFreeListStore(FfxUInt32 index, FfxUInt32 value) { g_rw_slot_free_list.data[index] = value; }
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_LEVEL_SLOT_MAPS
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_LEVEL_SLOT_MAPS, std430) coherent buffer BrixelizerGILevelSlotMaps_t { FfxUInt32 data[]; } g_rw_level_slot_maps;
+    FfxUInt32 LevelSlotLoad(FfxUInt32 index) { return g_rw_level_slot_maps.data[index] - 1u; }
+    void LevelSlotStore(FfxUInt32 index, FfxUInt32 slot) { g_rw_level_slot_maps.data[index] = slot + 1u; }
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_NEW_SLOTS
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_NEW_SLOTS, std430) coherent buffer BrixelizerGINewSlots_t { FfxUInt32 data[]; } g_rw_new_slots;
+    FfxUInt32 NewSlotLoad(FfxUInt32 index) { return g_rw_new_slots.data[index] - 1u; }
+    void NewSlotStore(FfxUInt32 index, FfxUInt32 slot) { g_rw_new_slots.data[index] = slot + 1u; }
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_SEED_LIST
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SEED_LIST, std430) coherent buffer BrixelizerGISeedList_t { FfxUInt32 data[]; } g_rw_seed_list;
+    FfxUInt32 SeedListLoad(FfxUInt32 index) { return g_rw_seed_list.data[index]; }
+    void SeedListStore(FfxUInt32 index, FfxUInt32 value) { g_rw_seed_list.data[index] = value; }
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS, std430) coherent buffer BrixelizerGISlotCounters_t { FfxUInt32 data[]; } g_rw_slot_counters;
+    FfxUInt32 SlotCounterAdd(FfxUInt32 index, FfxUInt32 value) { return atomicAdd(g_rw_slot_counters.data[index], value); }
+    FfxUInt32 SlotCounterLoad(FfxUInt32 index) { return g_rw_slot_counters.data[index]; }
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_BRICK_SLOT_MAP
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_BRICK_SLOT_MAP, std430) coherent buffer BrixelizerGIBrickSlotMapRW_t { FfxUInt32 data[]; } g_rw_bctx_brick_slot_map;
+    FfxUInt32 BrickSlotMapLoad(FfxUInt32 brick_index) { return g_rw_bctx_brick_slot_map.data[brick_index]; }
+    void BrickSlotMapStore(FfxUInt32 brick_index, FfxUInt32 slot) { g_rw_bctx_brick_slot_map.data[brick_index] = slot; }
+#endif
+#if defined BRIXELIZER_GI_BIND_CB_SLOT_CONSTANTS
+    #define GetSlotConstants() g_slot_constants.data
+    FfxFloat32x4 GetSlotMoverRow(FfxUInt32 mover, FfxUInt32 row)
+    {
+        return row == 0u ? g_slot_constants.data.movers[mover].transform_row0 : (row == 1u ? g_slot_constants.data.movers[mover].transform_row1 : g_slot_constants.data.movers[mover].transform_row2);
+    }
+    FfxFloat32x3 GetSlotMoverBoundsMin(FfxUInt32 mover) { return g_slot_constants.data.movers[mover].bounds_min.xyz; }
+    FfxFloat32x3 GetSlotMoverBoundsMax(FfxUInt32 mover) { return g_slot_constants.data.movers[mover].bounds_max.xyz; }
 #endif
 
 // The slot of the cache a brick reads and writes (0xffffffff: none). A pass that does not bind the slot map touches no cache.
