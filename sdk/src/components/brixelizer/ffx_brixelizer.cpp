@@ -74,9 +74,8 @@ typedef struct FfxBrixelizerCascadePrivate {
 } FfxBrixelizerCascadePrivate;
 
 typedef struct FfxBrixelizerInvalidation {
-    uint32_t          cascades;         // the levels whose static cascade it still has to clear
+    uint32_t          cascades;
     FfxBrixelizerAABB aabb;
-    uint32_t          moverCascades;    // vkfw patch: the levels whose mover cascade it still has to clear
 } FfxBrixelizerInvalidation;
 
 typedef struct FfxBrixelizerInstance {
@@ -87,15 +86,9 @@ typedef struct FfxBrixelizerInstance {
     // which is what every instance used to get.
     uint32_t                minCascade;
     uint32_t                maxCascade;
-    // vkfw patch: FFX_BRIXELIZER_INSTANCE_FLAG_MOVER: baked into the mover cascades (the static one at a level without).
+    // vkfw patch: FFX_BRIXELIZER_INSTANCE_FLAG_MOVER: baked into the mover cascades (the dynamic one at a level without), never the static.
     uint32_t                isMover;
 } FfxBrixelizerInstance;
-
-// vkfw patch: whether a persistent instance is baked into a level's static cascade: a static one, or a mover at a level without a mover cascade.
-static bool instanceInStaticCascade(const FfxBrixelizerInstance *instance, FfxBrixelizerCascadeFlag levelFlags)
-{
-    return !instance->isMover || !(levelFlags & FFX_BRIXELIZER_CASCADE_MOVER);
-}
 
 // vkfw patch: whether an instance is submitted to this logical cascade at all.
 static bool instanceInCascade(const FfxBrixelizerInstance *instance, uint32_t cascadeIndex)
@@ -248,7 +241,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         ifor (context->numStaticInstances) {
             FfxBrixelizerInstance *instance = &context->instances[i];
             // vkfw patch: cascadeIndex is the logical cascade, which is the granularity the band names.
-            if (instanceInStaticCascade(instance, cascadePrivate->flags) && instanceInCascade(instance, cascadeIndex) && aabbsOverlap(instance->aabb, casacadeAABB)) {
+            if (!instance->isMover && instanceInCascade(instance, cascadeIndex) && aabbsOverlap(instance->aabb, casacadeAABB)) {
                 FfxBrixelizerRawJobDescription job = {};
                 ifor (3) {
                     job.aabbMin[i] = instance->aabb.min[i];
@@ -279,7 +272,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
                     FFX_ASSERT(outDesc->numStaticJobs <= FFX_ARRAY_ELEMENTS(outDesc->staticJobs));
                 }
                 invalidation->cascades &= ~cascadeMask;
-                if (!invalidation->cascades && !invalidation->moverCascades) {
+                if (!invalidation->cascades) {
                     context->invalidations[curInvalidation] = context->invalidations[--context->numInvalidations];
                     continue;
                 }
@@ -288,7 +281,9 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         }
     }
 
-    // vkfw patch: create mover jobs, as the static ones but for the mover instances and the mover invalidations
+    // vkfw patch: create mover jobs: every mover instance in band. The mover cascade is reset on each of its turns, like the dynamic one,
+    // so a mover's move needs no invalidation: a moving body re-made every frame would otherwise queue two a frame, each held until every level
+    // of its band had taken it, and overrun the invalidation array within seconds.
     outDesc->numMoverJobs = 0;
     if (cascadePrivate->flags & FFX_BRIXELIZER_CASCADE_MOVER) {
         FfxBrixelizerRawJobDescription *curJob = outDesc->moverJobs;
@@ -308,30 +303,6 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
             }
         }
 
-        uint32_t cascadeMask = 1 << cascadeIndex;
-        uint32_t curInvalidation = 0;
-        while (curInvalidation < context->numInvalidations) {
-            FfxBrixelizerInvalidation *invalidation = &context->invalidations[curInvalidation];
-            if (invalidation->moverCascades & cascadeMask) {
-                if (aabbsOverlap(invalidation->aabb, casacadeAABB)) {
-                    FfxBrixelizerRawJobDescription job = {};
-                    ifor (3) {
-                        job.aabbMin[i] = invalidation->aabb.min[i];
-                        job.aabbMax[i] = invalidation->aabb.max[i];
-                    }
-                    job.flags = FFX_BRIXELIZER_RAW_JOB_FLAG_INVALIDATE;
-                    *curJob++ = job;
-                    outDesc->numMoverJobs++;
-                    FFX_ASSERT(outDesc->numMoverJobs <= FFX_ARRAY_ELEMENTS(outDesc->moverJobs));
-                }
-                invalidation->moverCascades &= ~cascadeMask;
-                if (!invalidation->cascades && !invalidation->moverCascades) {
-                    context->invalidations[curInvalidation] = context->invalidations[--context->numInvalidations];
-                    continue;
-                }
-            }
-            ++curInvalidation;
-        }
     }
 
     // create dynamic jobs
@@ -353,6 +324,22 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
             job->instanceIdx = context->instances[i].id;
             ++job;
             ++outDesc->numDynamicJobs;
+        }
+        // vkfw patch: at a level without a mover cascade the movers are baked as the dynamic instances are.
+        if (!(cascadePrivate->flags & FFX_BRIXELIZER_CASCADE_MOVER)) {
+            ifor (context->numStaticInstances) {
+                const FfxBrixelizerInstance *instance = &context->instances[i];
+                if (!instance->isMover || !instanceInCascade(instance, cascadeIndex) || !aabbsOverlap(instance->aabb, casacadeAABB)) {
+                    continue;
+                }
+                jfor (3) {
+                    job->aabbMin[j] = instance->aabb.min[j];
+                    job->aabbMax[j] = instance->aabb.max[j];
+                }
+                job->instanceIdx = instance->id;
+                ++job;
+                ++outDesc->numDynamicJobs;
+            }
         }
     }
 
@@ -378,7 +365,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         if (context->cascades[cascadeIndex].flags & FFX_BRIXELIZER_CASCADE_MOVER) {
             cascadeUpdateDesc->numJobs = outDesc->numMoverJobs;
             cascadeUpdateDesc->jobs = outDesc->moverJobs;
-            cascadeUpdateDesc->flags = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_NONE;
+            cascadeUpdateDesc->flags = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_RESET;
             FFX_VALIDATE(ffxBrixelizerRawContextGetScratchMemorySize(&context->context, cascadeUpdateDesc, &moverSize));
         }
 
@@ -418,12 +405,12 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
         ffxBrixelizerRawContextUpdateCascade(&context->context, &desc->cascadeUpdateDesc);
     }
 
-    // vkfw patch: update mover cascade (persistent, as the static one)
+    // vkfw patch: update mover cascade (reset, as the dynamic one: its instances persist, its bricks do not)
     if (flags & FFX_BRIXELIZER_CASCADE_MOVER) {
         desc->cascadeUpdateDesc.cascadeIndex = moverCascadeIndex;
         desc->cascadeUpdateDesc.numJobs = desc->numMoverJobs;
         desc->cascadeUpdateDesc.jobs = desc->moverJobs;
-        desc->cascadeUpdateDesc.flags = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_NONE;
+        desc->cascadeUpdateDesc.flags = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_RESET;
         ffxBrixelizerRawContextUpdateCascade(&context->context, &desc->cascadeUpdateDesc);
     }
 
@@ -593,30 +580,23 @@ static void resolveCascadeRange(const FfxBrixelizerContext_Private *context,
 
 static void addInvalidationJob(FfxBrixelizerContext_Private* context, FfxBrixelizerAABB aabb, uint32_t minCascade, uint32_t maxCascade, uint32_t isMover)
 {
+    // vkfw patch: a mover is in no static cascade, and the cascades it is in are reset on each of their turns.
+    if (isMover) {
+        return;
+    }
+
     FfxBrixelizerInvalidation invalidation = {};
 
     uint32_t cascadesMask = 0;
-    uint32_t moverCascadesMask = 0;
     ifor (context->numCascades) {
         // vkfw patch: only the cascades this instance's band reaches. An invalidation outside it
         // clears bricks the instance never put anything into, and each one costs a job on that
         // cascade's next turn.
-        if (i < minCascade || i > maxCascade) {
-            continue;
-        }
-        // vkfw patch: a mover's goes to the mover cascade of its levels that have one.
-        const FfxBrixelizerCascadeFlag levelFlags = context->cascades[i].flags;
-        if (isMover && (levelFlags & FFX_BRIXELIZER_CASCADE_MOVER)) {
-            moverCascadesMask |= 1 << i;
-        } else if (levelFlags & FFX_BRIXELIZER_CASCADE_STATIC) {
+        if ((context->cascades[i].flags & FFX_BRIXELIZER_CASCADE_STATIC) && i >= minCascade && i <= maxCascade) {
             cascadesMask |= 1 << i;
         }
     }
-    if (!cascadesMask && !moverCascadesMask) {
-        return;
-    }
     invalidation.cascades = cascadesMask;
-    invalidation.moverCascades = moverCascadesMask;
     invalidation.aabb = aabb;
 
     FFX_ASSERT(context->numInvalidations < FFX_ARRAY_ELEMENTS(context->invalidations));
