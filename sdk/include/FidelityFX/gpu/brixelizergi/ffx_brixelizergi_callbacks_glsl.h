@@ -125,6 +125,7 @@ FfxFloat32x2 LoadSkyVisibilityHistory(FfxUInt32x2 coord);
 void StoreSkyVisibilityHistory(FfxUInt32x2 coord, FfxFloat32x2 value);
 FfxFloat32x3 SampleEnvironmentMap(FfxFloat32x3 world_space_reflected_direction);
 FfxFloat32x3 SampleRadianceCacheSRV(FfxFloat32x3 uvw);
+FfxFloat32x3 LoadRadianceCacheSRV(FfxUInt32x3 coord);
 FfxFloat32x3 LoadRadianceCache(FfxUInt32x3 coord);
 void StoreRadianceCache(FfxUInt32x3 coord, FfxFloat32x3 value);
 void StoreDebugVisualization(FfxUInt32x2 pixel_coordinate, FfxFloat32x4 value);
@@ -669,6 +670,12 @@ FfxFloat32x3 SampleEnvironmentMap(FfxFloat32x3 world_space_reflected_direction)
 #endif
 
 #if defined BRIXELIZER_GI_BIND_SRV_RADIANCE_CACHE
+// vkfw patch: one texel, for the sampling that leaves out the texels nothing has lit (FfxBrixelizerGISampleRadianceTexels).
+FfxFloat32x3 LoadRadianceCacheSRV(FfxUInt32x3 coord)
+{
+    return texelFetch(g_bctx_radiance_cache, FfxInt32x3(coord), 0).xyz;
+}
+
 FfxFloat32x3 SampleRadianceCacheSRV(FfxFloat32x3 uvw)
 {
     return textureLod(sampler3D(g_bctx_radiance_cache, g_clamp_nearest_sampler), uvw, 0.0f).rgb;

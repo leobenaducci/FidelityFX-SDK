@@ -228,21 +228,40 @@ FfxFloat32 FfxBrixelizerGIGetVoxelSize(FfxFloat32x3 world_pos, FfxUInt32 g_start
     return CINFO.voxel_size * ffxMax(FfxFloat32(1.0), r);
 }
 
+// vkfw patch: trilinear between a slot's 4^3 radiance texels (centres at uvw = k/3), over the lit ones only. A texel nothing has lit yet is
+// zero, which means unknown, not dark: a filtered fetch averages it in as black, and the texels a surface moving through its voxel (a body
+// in motion, its bricks rebuilt at another place within the voxel each bake) has just reached are all such, so it showed as black specks.
+// Zero when none of the eight is lit: falling back to another level there leaks light into what is really dark.
+FfxFloat32x3 FfxBrixelizerGISampleRadianceTexels(FfxUInt32 slot, FfxFloat32x3 uvw, inout FfxFloat32 lit_weight)
+{
+    const FfxFloat32x3 t    = ffxSaturate(uvw) * FfxFloat32(3.0);
+    const FfxUInt32x3  lo   = min(FfxUInt32x3(t), FFX_BROADCAST_UINT32X3(2u));
+    const FfxFloat32x3 f    = t - FfxFloat32x3(lo);
+    const FfxUInt32x3  base = FfxBrixelizerGetSDFAtlasOffset(slot) / 2 + lo;
+    FfxFloat32x3       radiance = FFX_BROADCAST_FLOAT32X3(0.0);
+    lit_weight = FfxFloat32(0.0);
+    for (FfxUInt32 c = 0u; c < 8u; ++c)
+    {
+        const FfxUInt32x3  corner = FfxUInt32x3(c & 1u, (c >> 1u) & 1u, c >> 2u);
+        const FfxFloat32x3 w3     = ffxLerp(FFX_BROADCAST_FLOAT32X3(1.0) - f, f, FfxFloat32x3(corner));
+        const FfxFloat32x3 texel  = LoadRadianceCacheSRV(base + corner);
+        if (any(FFX_GREATER_THAN(texel, FFX_BROADCAST_FLOAT32X3(0.0))) && !any(isnan(texel)))
+        {
+            const FfxFloat32 w = w3.x * w3.y * w3.z;
+            radiance += texel * w;
+            lit_weight += w;
+        }
+    }
+    return lit_weight > FfxFloat32(0.0) ? radiance / lit_weight : FFX_BROADCAST_FLOAT32X3(0.0);
+}
+
 FfxFloat32x3 FfxBrixelizerGISampleRadianceCache(FfxUInt32 brick_id, FfxFloat32x3 uvw)
 {
     const FfxUInt32 slot = FfxBrixelizerGICacheSlot(brick_id);
     if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
         return FFX_BROADCAST_FLOAT32X3(0.0);
-    FfxUInt32x3  brick_offset = FfxBrixelizerGetSDFAtlasOffset(slot);
-    FfxFloat32x3 uvw_min      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(0.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
-    FfxFloat32x3 uvw_max      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(3.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
-    FfxFloat32x3 sample_uvw   = ffxLerp(uvw_min, uvw_max, ffxSaturate(uvw));
-    FfxFloat32x3 radiance     = SampleRadianceCacheSRV(sample_uvw);
-
-    if (any(isnan(radiance)))
-        radiance = FFX_BROADCAST_FLOAT32X3(0.0f);
-
-    return radiance;
+    FfxFloat32 lit_weight;
+    return FfxBrixelizerGISampleRadianceTexels(slot, uvw, lit_weight);
 }
 
 FfxFloat32x3 FfxBrixelizerGISampleRadianceCacheSH(FfxUInt32 brick_id, FfxFloat32x3 ray_direction)
@@ -264,8 +283,12 @@ FfxFloat32x3 FfxBrixelizerGISampleRadianceCacheSH(FfxUInt32 brick_id, FfxFloat32
     return radiance;
 }
 
-FfxFloat32x3 FfxBrixelizerGISampleRadianceCache(FfxUInt32 cascade_id, FfxFloat32x3 dir, FfxBrixelizerCascadeInfo sdfCINFO, FfxFloat32x3 world_pos)
+// vkfw patch: found is false where the cascade has no brick (or the brick no cache) at the point: the walk below goes on to the next level
+// then, which knows something, rather than answer black. A body in motion is a bake or more behind its raster at each level, so its
+// surface pixels often fall in a voxel whose brick its last bake has not made yet.
+FfxFloat32x3 FfxBrixelizerGISampleRadianceCache(FfxUInt32 cascade_id, FfxFloat32x3 dir, FfxBrixelizerCascadeInfo sdfCINFO, FfxFloat32x3 world_pos, inout FfxBoolean found)
 {
+    found = false;
     FfxFloat32x3 rel_pos      = world_pos - sdfCINFO.grid_min;
     FfxInt32x3   voxel_offset = FfxInt32x3(rel_pos / sdfCINFO.voxel_size);
     FfxFloat32x3 uvw          = (rel_pos - FfxFloat32x3(voxel_offset) * sdfCINFO.voxel_size) / sdfCINFO.voxel_size;
@@ -278,22 +301,18 @@ FfxFloat32x3 FfxBrixelizerGISampleRadianceCache(FfxUInt32 cascade_id, FfxFloat32
         if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
             return FFX_BROADCAST_FLOAT32X3(0.0);
 
-        FfxUInt32x4  sample_sh_state = LoadBricksSHState(slot);
-        FFX_MIN16_F4 sample_dir_w    = FFX_MIN16_F4(ffxUnpackF32x2(sample_sh_state.xy));
-
-        FfxUInt32x3   brick_offset = FfxBrixelizerGetSDFAtlasOffset(slot);
-        FfxFloat32x3  uvw_min      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(0.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
-        FfxFloat32x3  uvw_max      = (FfxFloat32x3(brick_offset / 2) + FFX_BROADCAST_FLOAT32X3(FfxFloat32(3.5))) / FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE / 2);
-        uvw                        = ffxLerp(uvw_min, uvw_max, ffxSaturate(uvw));
-        FfxFloat32x3  radiance     = SampleRadianceCacheSRV(uvw);
-
-        if (any(isnan(radiance)))
-            radiance = FFX_BROADCAST_FLOAT32X3(0.0f);
-
-        return radiance;
+        found = true;
+        FfxFloat32 lit_weight;
+        return FfxBrixelizerGISampleRadianceTexels(slot, uvw, lit_weight);
     }
-    
+
     return FFX_BROADCAST_FLOAT32X3(0.0);
+}
+
+FfxFloat32x3 FfxBrixelizerGISampleRadianceCache(FfxUInt32 cascade_id, FfxFloat32x3 dir, FfxBrixelizerCascadeInfo sdfCINFO, FfxFloat32x3 world_pos)
+{
+    FfxBoolean found;
+    return FfxBrixelizerGISampleRadianceCache(cascade_id, dir, sdfCINFO, world_pos, found);
 }
 FfxFloat32x3 FfxBrixelizerGISampleRadianceCacheSH(FfxUInt32 cascade_id, FfxFloat32x3 world_normal, FfxBrixelizerCascadeInfo sdfCINFO, FfxFloat32x3 world_pos)
 {
@@ -333,10 +352,13 @@ FfxBoolean FfxBrixelizerGISampleRadianceCache(FfxFloat32x3 world_offset, FfxFloa
 
         if (sdfCINFO.is_enabled == 1 && all(FFX_GREATER_THAN(world_pos, sdfCINFO.grid_min)) && all(FFX_LESS_THAN(world_pos, sdfCINFO.grid_max))) 
         {
-            FfxFloat32x3     brick_sample = FfxBrixelizerGISampleRadianceCache(cascade_id, dir, sdfCINFO, world_pos);
+            FfxBoolean       found;
+            FfxFloat32x3     brick_sample = FfxBrixelizerGISampleRadianceCache(cascade_id, dir, sdfCINFO, world_pos, found);
             const FfxFloat32 EPS          = FfxFloat32(1.0e-3);
             // Causes light leaks if the brick_sample is fully unlit.
-            //if (dot(brick_sample, brick_sample) > EPS * EPS) 
+            //if (dot(brick_sample, brick_sample) > EPS * EPS)
+            // vkfw patch: but no brick at all at this level is no answer: the next level's is.
+            if (found)
             {
                 cache = brick_sample;
                 return true;
