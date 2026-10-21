@@ -105,7 +105,10 @@
 #define FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_SPECULAR_TARGET_WRITE 113
 #define FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_COUNT                       (113 - FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_GI_TARGET_READ) 
 
-#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                114
+// vkfw patch: the application's sky visibility target; the interpolation's debug target stands in for it while there is none.
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY                114
+
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                115
 
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_GI_CONSTANTS                    0
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_PASS_CONSTANTS                  1

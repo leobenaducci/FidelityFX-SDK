@@ -167,6 +167,12 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource bricksDirectSH;             ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, the direct part of the same.
     FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32x4.
 
+    /// vkfw patch: optional, a R16G16B16A16_FLOAT UAV of ffxBrixelizerGIGetInternalSize() whose .x receives the sky visibility the screen probes'
+    /// rays saw, as 0 to 1 (1 = open sky) for the surface under each pixel; .w is 1. Leave it null (its FfxResource zero-initialised) to skip the
+    /// work. Taken from the rays the GI traces anyway: a ray that left the scene without a hit counts as sky, so it knows nothing of what the
+    /// TLAS or a celestial body would add, and the rays only reach tMax. Written at the GI's internal resolution (not upsampled).
+    FfxResource skyVisibility;
+
     FfxBrixelizerRawContext *brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDispatchDescription;
 
@@ -301,6 +307,15 @@ FFX_API FfxErrorCode ffxBrixelizerGIContextCreate(FfxBrixelizerGIContext* pConte
 ///
 /// @ingroup ffxBrixgi
 FFX_API FfxErrorCode ffxBrixelizerGIContextDestroy(FfxBrixelizerGIContext* pContext);
+
+/// vkfw patch: the size the GI's internal targets (FfxBrixelizerGIDispatchDescription::skyVisibility) must have: the display size times the
+/// internal resolution's scale.
+///
+/// @param [in]  pContext   An <c><i>FfxBrixelizerGIContext</i></c> containing the Brixelizer GI context.
+/// @param [out] pSize      The width and height.
+///
+/// @ingroup ffxBrixgi
+FFX_API FfxErrorCode ffxBrixelizerGIGetInternalSize(const FfxBrixelizerGIContext* pContext, FfxDimensions2D* pSize);
 
 /// Perform an update of Brixelizer GI, recording GPU commands to a command list.
 ///

@@ -56,6 +56,7 @@ FfxUInt32 GetTracingConstantsEndCascade();
 FfxFloat32 GetTracingConstantsRayPushoff();
 FfxFloat32 GetTracingConstantsTMin();
 FfxFloat32 GetTracingConstantsTMax();
+FfxUInt32 GetSkyVisibilityEnabled();
 FfxFloat32 GetTracingConstantsSDFSolveEpsilon();
 FfxFloat32 GetTracingConstantsSpecularRayPushoff();
 FfxFloat32 GetTracingConstantsSpecularSDFSolveEpsilon();
@@ -119,6 +120,7 @@ FfxFloat32x4 LoadStaticGITargetSRV(FfxUInt32x2 coord);
 void StoreStaticGITarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x4 LoadDebugTraget(FfxUInt32x2 coord);
 void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
+void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x3 SampleEnvironmentMap(FfxFloat32x3 world_space_reflected_direction);
 FfxFloat32x3 SampleRadianceCacheSRV(FfxFloat32x3 uvw);
 FfxFloat32x3 LoadRadianceCache(FfxUInt32x3 coord);
@@ -295,6 +297,10 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
 
 #if defined BRIXELIZER_GI_BIND_UAV_DEBUG_TARGET
     layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_DEBUG_TARGET, rgba16f)                  uniform image2D g_sdfgi_rw_debug_target;
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET, rgba16f)         uniform image2D g_sdfgi_rw_sky_visibility_target;
 #endif
 
 #if defined BRIXELIZER_GI_BIND_UAV_RADIANCE_CACHE
@@ -710,6 +716,11 @@ FfxFloat32 GetTracingConstantsTMax()
     return g_sdfgi_constants.data.tracing_constants.t_max;
 }
 
+FfxUInt32 GetSkyVisibilityEnabled()
+{
+    return g_sdfgi_constants.data.sky_visibility_enabled;
+}
+
 FfxFloat32 GetTracingConstantsSDFSolveEpsilon()
 {
     return g_sdfgi_constants.data.tracing_constants.sdf_solve_eps;
@@ -1118,6 +1129,13 @@ FfxFloat32x4 LoadDebugTraget(FfxUInt32x2 coord)
 void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 {
     imageStore(g_sdfgi_rw_debug_target, FfxInt32x2(coord), value);
+}
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET
+void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
+{
+    imageStore(g_sdfgi_rw_sky_visibility_target, FfxInt32x2(coord), value);
 }
 #endif
 

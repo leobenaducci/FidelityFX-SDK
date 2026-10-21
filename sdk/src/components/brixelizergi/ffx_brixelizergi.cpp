@@ -78,7 +78,8 @@ static const ResourceBinding uavResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_STATIC_PUSHOFF_MAP, L"g_sdfgi_rw_static_pushoff_map"},
     {FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_GI_TARGET_WRITE, L"g_sdfgi_rw_static_gitarget"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET, L"g_sdfgi_rw_debug_target"},
-    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE, L"g_rw_bctx_radiance_cache"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY, L"g_sdfgi_rw_sky_visibility_target"},
+{FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE, L"g_rw_bctx_radiance_cache"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_TEMP_SPAWN_MASK, L"g_sdfgi_rw_temp_spawn_mask"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_TEMP_RAND_SEED, L"g_sdfgi_rw_temp_rand_seed"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_TEMP_SPECULAR_PRETRACE_TARGET, L"g_sdfgi_rw_temp_specular_pretrace_target"},
@@ -1402,7 +1403,22 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
     brixelizerGIRegisterExternalResources(pContext, &pDispatchDescription->radianceCache, &pDispatchDescription->bricksSH,
                                           &pDispatchDescription->bricksDirectSH, &pDispatchDescription->bricksSHState);
-    pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
+
+    // vkfw patch: the sky visibility target, or, while there is none, the interpolation's debug target standing in for the binding it
+    // declares anyway (the shaders only write it with sky_visibility_enabled).
+    const bool bSkyVisibility = !isResourceNull(pDispatchDescription->skyVisibility);
+    if (bSkyVisibility)
+    {
+        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
+                                                                         &pDispatchDescription->skyVisibility,
+                                                                         pContext->effectContextId,
+                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY]);
+    }
+    else
+    {
+        pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY] = pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET];
+    }
+pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDispatchDescription->bricksAABBs,
                                                                      pContext->effectContextId,
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_CONTEXT_BRICKS_AABB]);
@@ -1531,6 +1547,7 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
     giConstants.tracing_constants.preview_sdf_solve_eps  = 0.0f;
     giConstants.tracing_constants.t_min                  = pDispatchDescription->tMin;
     giConstants.tracing_constants.t_max                  = pDispatchDescription->tMax;
+    giConstants.sky_visibility_enabled                   = bSkyVisibility ? 1u : 0u;
 
     FfxBrixelizerContextInfo contextInfo = {};
     FFX_VALIDATE(ffxBrixelizerRawContextGetInfo((FfxBrixelizerRawContext*)rawContext, &contextInfo));
@@ -1950,6 +1967,16 @@ FfxErrorCode ffxBrixelizerGIContextCreate(FfxBrixelizerGIContext* pContext, cons
     const FfxErrorCode              errorCode      = brixelizerGICreate(contextPrivate, pContextDescription);
 
     return errorCode;
+}
+
+FfxErrorCode ffxBrixelizerGIGetInternalSize(const FfxBrixelizerGIContext* pContext, FfxDimensions2D* pSize)
+{
+    FFX_RETURN_ON_ERROR(pContext, FFX_ERROR_INVALID_POINTER);
+    FFX_RETURN_ON_ERROR(pSize, FFX_ERROR_INVALID_POINTER);
+
+    const FfxBrixelizerGIContext_Private* pPrivate = (const FfxBrixelizerGIContext_Private*)pContext;
+    *pSize = pPrivate->internalSize;
+    return FFX_OK;
 }
 
 FfxErrorCode ffxBrixelizerGIContextDestroy(FfxBrixelizerGIContext* pContext)

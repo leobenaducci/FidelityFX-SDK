@@ -68,7 +68,7 @@ struct FfxBrixelizerGIConstants
 
     FfxFloat32x2 motionVectorScale;
     FfxUInt32    debug_type;
-    FfxFloat32  _padding;
+    FfxUInt32    sky_visibility_enabled;  // vkfw patch: the dispatch has a skyVisibility target to write
 
     FfxUInt32x2 buffer_dimensions;
     FfxUInt32x2 probe_buffer_dimensions;

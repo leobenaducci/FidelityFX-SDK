@@ -56,6 +56,7 @@ FfxUInt32 GetTracingConstantsEndCascade();
 FfxFloat32 GetTracingConstantsRayPushoff();
 FfxFloat32 GetTracingConstantsTMin();
 FfxFloat32 GetTracingConstantsTMax();
+FfxUInt32 GetSkyVisibilityEnabled();
 FfxFloat32 GetTracingConstantsSDFSolveEpsilon();
 FfxFloat32 GetTracingConstantsSpecularRayPushoff();
 FfxFloat32 GetTracingConstantsSpecularSDFSolveEpsilon();
@@ -119,6 +120,7 @@ FfxFloat32x4 LoadStaticGITargetSRV(FfxUInt32x2 coord);
 void StoreStaticGITarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x4 LoadDebugTraget(FfxUInt32x2 coord);
 void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
+void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x3 SampleEnvironmentMap(FfxFloat32x3 world_space_reflected_direction);
 FfxFloat32x3 SampleRadianceCacheSRV(FfxFloat32x3 uvw);
 FfxFloat32x3 LoadRadianceCache(FfxUInt32x3 coord);
@@ -296,6 +298,10 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
 
 #if defined BRIXELIZER_GI_BIND_UAV_STATIC_GI_TARGET
     RWTexture2D<FfxFloat32x4>           g_sdfgi_rw_static_gitarget               : FFX_BRIXELIZER_DECLARE_UAV(BRIXELIZER_GI_BIND_UAV_STATIC_GI_TARGET);
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET
+    RWTexture2D<FfxFloat32x4>           g_sdfgi_rw_sky_visibility_target         : FFX_BRIXELIZER_DECLARE_UAV(BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET);
 #endif
 
 #if defined BRIXELIZER_GI_BIND_UAV_DEBUG_TARGET
@@ -684,6 +690,11 @@ FfxFloat32 GetTracingConstantsTMin()
 FfxFloat32 GetTracingConstantsTMax()
 {
     return g_sdfgi_constants.tracing_constants.t_max;
+}
+
+FfxUInt32 GetSkyVisibilityEnabled()
+{
+    return g_sdfgi_constants.sky_visibility_enabled;
 }
 
 FfxFloat32 GetTracingConstantsSDFSolveEpsilon()
@@ -1095,6 +1106,13 @@ FfxFloat32x4 LoadDebugTraget(FfxUInt32x2 coord)
 void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 {
     g_sdfgi_rw_debug_target[coord] = value;
+}
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET
+void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
+{
+    g_sdfgi_rw_sky_visibility_target[coord] = value;
 }
 #endif
 
