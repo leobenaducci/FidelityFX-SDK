@@ -35,6 +35,7 @@
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_CLEARS 1u             // slots zeroed: no coarser brick to start from
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_SAME_POSITION 2u      // bricks that kept their voxel's slot
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMED 3u      // bricks that took a slot from where a mover was
+#define FFX_BRIXELIZER_GI_SLOT_COUNTER_LOST_COPIED 4u         // slots filled from the voxel's own slot, which another brick claimed first
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDED 5u             // slots filled from the coarser cascade
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_ALLOC_FAILED 6u       // bricks left without a slot: the pool is full
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_BRICKS 7u             // bricks in the rebuilt cascade, after the passes
@@ -43,6 +44,10 @@
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_ALLOCATED 10u         // slots the cascade took
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_HISTOGRAM 16u         // 8 buckets: no samples, then one a doubling
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS 32u             // the seed list's length
+
+// In the new-slot map between the claims and the allocation: the voxel's slot, which another brick claimed first (a body that moved into it). The
+// brick takes a new slot, copied from that one. Slots are below 2^18.
+#define FFX_BRIXELIZER_GI_SLOT_LOST_FLAG 0x80000000u
 
 // A sweep over the wave's cascade indices, so that the descriptor index is wave-uniform at every load whatever the caller passes: FidelityFX's own
 // traversal makes its cascade index uniform with wave intrinsics (FfxBrixelizerTraverseRaw), and the brick maps are indexed here inside divergent
@@ -79,13 +84,16 @@ void FfxBrixelizerGISlotsClaimSame(FfxUInt32 tid)
     if (tid >= FFX_BRIXELIZER_GI_SLOT_VOXELS)
         return;
 
-const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
+    const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
     const FfxBrixelizerCascadeInfo cascade     = GetCascadeInfo(cascade_idx);
     const FfxUInt32x3              voxel       = FfxBrixelizerUnflattenPOT(tid, FFX_BRIXELIZER_CASCADE_DEGREE);
     const FfxUInt32                cell        = FfxBrixelizerGISlotCell(voxel, cascade);
-NewSlotStore(cell, FFX_BRIXELIZER_GI_SLOT_INVALID);
-const FfxUInt32 brick = FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell);
-if (!FfxBrixelizerIsValidID(brick) || GetSlotConstants().previous_valid == 0u || GetSlotConstants().carry == 0u)
+    // The mover claim ran first and has the bricks of the bodies that moved.
+    if (NewSlotLoad(cell) != FFX_BRIXELIZER_GI_SLOT_INVALID)
+        return;
+
+    const FfxUInt32 brick = FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell);
+    if (!FfxBrixelizerIsValidID(brick) || GetSlotConstants().previous_valid == 0u || GetSlotConstants().carry == 0u)
         return;
 
     // Where the voxel was in the cascade's window before the bake; the slot map's cell is the same one, but holds what the voxel was only
@@ -97,10 +105,16 @@ if (!FfxBrixelizerIsValidID(brick) || GetSlotConstants().previous_valid == 0u ||
         return;
 
     const FfxUInt32 slot = LevelSlotLoad(FfxBrixelizerGISlotLevelBase() + cell);
-    if (slot != FFX_BRIXELIZER_GI_SLOT_INVALID && SlotClaimExchange(slot, GetSlotConstants().claim_tag) != GetSlotConstants().claim_tag)
+    if (slot == FFX_BRIXELIZER_GI_SLOT_INVALID)
+        return;
+    if (SlotClaimExchange(slot, GetSlotConstants().claim_tag) != GetSlotConstants().claim_tag)
     {
         NewSlotStore(cell, slot);
         SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_SAME_POSITION, 1u);
+    }
+    else
+    {
+        NewSlotStore(cell, slot | FFX_BRIXELIZER_GI_SLOT_LOST_FLAG);
     }
 }
 #endif // FFX_BRIXELIZER_GI_SLOTS_PASS_CLAIM_SAME
@@ -108,14 +122,27 @@ if (!FfxBrixelizerIsValidID(brick) || GetSlotConstants().previous_valid == 0u ||
 #if defined FFX_BRIXELIZER_GI_SLOTS_PASS_CLAIM_MOVER
 void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
 {
-    if (tid >= FFX_BRIXELIZER_GI_SLOT_VOXELS || GetSlotConstants().num_movers == 0u || GetSlotConstants().previous_valid == 0u || GetSlotConstants().carry == 0u)
+    if (tid >= FFX_BRIXELIZER_GI_SLOT_VOXELS)
         return;
+    // The first pass of a cascade's: the seed list is this cascade's alone (a dispatch can run the passes for several).
+    if (tid == 0u)
+        SlotCounterExchange(FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS, 0u);
 
     const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
     const FfxBrixelizerCascadeInfo cascade     = GetCascadeInfo(cascade_idx);
     const FfxUInt32x3              voxel       = FfxBrixelizerUnflattenPOT(tid, FFX_BRIXELIZER_CASCADE_DEGREE);
     const FfxUInt32                cell        = FfxBrixelizerGISlotCell(voxel, cascade);
-    if (NewSlotLoad(cell) != FFX_BRIXELIZER_GI_SLOT_INVALID || !FfxBrixelizerIsValidID(FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell)))
+    NewSlotStore(cell, FFX_BRIXELIZER_GI_SLOT_INVALID);
+    if (GetSlotConstants().num_movers == 0u || GetSlotConstants().previous_valid == 0u || GetSlotConstants().carry == 0u)
+        return;
+
+    const FfxUInt32 brick = FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell);
+    if (!FfxBrixelizerIsValidID(brick))
+        return;
+    // Only a brick of the cascade the moving bodies are baked into: a static one in a mover's (padded) bounds is the floor under it, and keeps its
+    // own voxel's cache.
+    if (GetSlotConstants().mover_source_cascade != 0xffffffffu &&
+        FfxBrixelizerGetVoxelCascade(LoadBricksVoxelMap(FfxBrixelizerBrickGetIndex(brick))) != GetSlotConstants().mover_source_cascade)
         return;
 
     // A new brick on a body that has moved since this cascade's last bake: its content was where the motion takes it back to.
@@ -129,8 +156,9 @@ void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
         {
             const FfxFloat32x3 previous_position = FfxFloat32x3(dot(GetSlotMoverRow(m, 0u), position4), dot(GetSlotMoverRow(m, 1u), position4), dot(GetSlotMoverRow(m, 2u), position4));
             const FfxFloat32x3 rel               = (previous_position - GetSlotConstants().previous_grid_min) / GetSlotConstants().previous_voxel_size;
+            // Outside the window as it was: another body whose bounds also hold the voxel may still have been inside it.
             if (any(FFX_LESS_THAN(rel, FFX_BROADCAST_FLOAT32X3(0.0))) || any(FFX_GREATER_THAN_EQUAL(rel, FFX_BROADCAST_FLOAT32X3(FfxFloat32(FFX_BRIXELIZER_CASCADE_RESOLUTION)))))
-                return;
+                continue;
             const FfxUInt32x3 previous_voxel = FfxUInt32x3(rel);
             const FfxUInt32   previous_cell  = FfxBrixelizerFlattenPOT((previous_voxel + GetSlotConstants().previous_clipmap_offset) & FFX_BRIXELIZER_CASCADE_WRAP_MASK, FFX_BRIXELIZER_CASCADE_DEGREE);
             const FfxUInt32   slot           = LevelSlotLoad(FfxBrixelizerGISlotLevelBase() + previous_cell);
@@ -172,8 +200,10 @@ void FfxBrixelizerGISlotsAlloc(FfxUInt32 tid)
     const FfxBrixelizerCascadeInfo cascade     = GetCascadeInfo(cascade_idx);
     const FfxUInt32x3              voxel       = FfxBrixelizerUnflattenPOT(tid, FFX_BRIXELIZER_CASCADE_DEGREE);
     const FfxUInt32                cell        = FfxBrixelizerGISlotCell(voxel, cascade);
-    if (NewSlotLoad(cell) != FFX_BRIXELIZER_GI_SLOT_INVALID || !FfxBrixelizerIsValidID(FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell)))
+    const FfxUInt32 claimed = NewSlotLoad(cell);
+    if ((claimed != FFX_BRIXELIZER_GI_SLOT_INVALID && (claimed & FFX_BRIXELIZER_GI_SLOT_LOST_FLAG) == 0u) || !FfxBrixelizerIsValidID(FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell)))
         return;
+    const FfxUInt32 lost = claimed != FFX_BRIXELIZER_GI_SLOT_INVALID ? (claimed & ~FFX_BRIXELIZER_GI_SLOT_LOST_FLAG) : FFX_BRIXELIZER_GI_SLOT_INVALID;
 
     // A freed slot if there is one: popped by a compare-and-swap, so that threads racing for the last one cannot both read past the stack's end.
     FfxUInt32 slot = FFX_BRIXELIZER_GI_SLOT_INVALID;
@@ -198,6 +228,7 @@ void FfxBrixelizerGISlotsAlloc(FfxUInt32 tid)
     if (slot == FFX_BRIXELIZER_GI_SLOT_INVALID)
     {
         // None left: the brick has no cache, and reads as nothing.
+        NewSlotStore(cell, FFX_BRIXELIZER_GI_SLOT_INVALID);
         SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_ALLOC_FAILED, 1u);
         return;
     }
@@ -205,8 +236,9 @@ void FfxBrixelizerGISlotsAlloc(FfxUInt32 tid)
     NewSlotStore(cell, slot);
     SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_ALLOCATED, 1u);
     const FfxUInt32 entry = SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS, 1u);
-    SeedListStore(entry * 2u + 0u, slot);
-    SeedListStore(entry * 2u + 1u, cell);
+    SeedListStore(entry * 3u + 0u, slot);
+    SeedListStore(entry * 3u + 1u, cell);
+    SeedListStore(entry * 3u + 2u, lost);
 }
 #endif // FFX_BRIXELIZER_GI_SLOTS_PASS_ALLOC
 
@@ -318,9 +350,29 @@ void FfxBrixelizerGISlotsSeed(FfxUInt32 tid)
     if (tid >= SlotCounterLoad(FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS))
         return;
 
-    const FfxUInt32                slot        = SeedListLoad(tid * 2u + 0u);
-    const FfxUInt32                cell        = SeedListLoad(tid * 2u + 1u);
-    const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
+    const FfxUInt32                slot        = SeedListLoad(tid * 3u + 0u);
+    const FfxUInt32                cell        = SeedListLoad(tid * 3u + 1u);
+    const FfxUInt32                lost        = SeedListLoad(tid * 3u + 2u);
+
+    // The voxel's own slot, which a body that moved in claimed first: what was here, until this bake, is the best start there is. The claimant only
+    // writes to it after these passes.
+    if (lost != FFX_BRIXELIZER_GI_SLOT_INVALID)
+    {
+        for (FfxUInt32 i = 0u; i < 9u; ++i)
+        {
+            StoreBricksSH(slot * 9u + i, LoadBricksSH(lost * 9u + i));
+            StoreBricksDirectSH(slot * 9u + i, LoadBricksDirectSH(lost * 9u + i));
+        }
+        StoreBricksSHState(slot, LoadBricksSHState(lost));
+        for (FfxUInt32 texel = 0u; texel < 64u; ++texel)
+        {
+            const FfxUInt32x3 offset = FfxBrixelizerUnflattenPOT(texel, 2);
+            StoreRadianceCache(FfxBrixelizerGetSDFAtlasOffset(slot) / 2 + offset, LoadRadianceCache(FfxBrixelizerGetSDFAtlasOffset(lost) / 2 + offset));
+        }
+        SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_LOST_COPIED, 1u);
+        return;
+    }
+const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
     const FfxBrixelizerCascadeInfo cascade     = GetCascadeInfo(cascade_idx);
     // The cell is the window's voxel plus the clipmap offset, per axis.
     const FfxUInt32x3  voxel    = (FfxBrixelizerUnflattenPOT(cell, FFX_BRIXELIZER_CASCADE_DEGREE) - cascade.clipmap_offset) & FFX_BRIXELIZER_CASCADE_WRAP_MASK;

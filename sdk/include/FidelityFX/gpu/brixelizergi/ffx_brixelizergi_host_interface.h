@@ -129,7 +129,7 @@ struct FfxBrixelizerGISlotConstants
     FfxFloat32   seed_min_samples;       // the samples a coarser brick needs before a new one is seeded from it
 
     FfxUInt32    claim_tag;              // this bake's: a slot whose claim is it was claimed by a brick of this bake
-    FfxUInt32    _padding0;
+    FfxUInt32    mover_source_cascade;   // the cascade (physical index) the moving bodies' bricks come from; 0xffffffff: any
     FfxUInt32    _padding1;
     FfxUInt32    _padding2;
 

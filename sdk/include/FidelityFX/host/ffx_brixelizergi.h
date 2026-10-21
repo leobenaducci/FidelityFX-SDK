@@ -50,7 +50,7 @@
 /// The size of the context specified in 32bit values.
 ///
 /// @ingroup ffxBrixgi
-#define FFX_BRIXELIZER_GI_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(320000)
+#define FFX_BRIXELIZER_GI_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(332000)
 
 /// FidelityFX Brixelizer GI context count
 /// 
@@ -131,6 +131,7 @@ typedef struct FfxBrixelizerGIMover
     float currentToPrevious[12];            ///< 3x4, row-major.
     float boundsMin[3];                     ///< The body's world bounds now.
     float boundsMax[3];
+    uint32_t levelMask;                     ///< The levels (startCascade-relative merged cascades) whose last bake the transform is from; 0: every level.
 } FfxBrixelizerGIMover;
 
 /// A structure encapsulating the parameters used for computing a dispatch by the
@@ -198,8 +199,9 @@ typedef struct FfxBrixelizerGIDispatchDescription
     uint32_t cacheFlags;                    ///< FfxBrixelizerGICacheFlags
     float    seedSamples;                   ///< The sample count a seeded brick's irradiance is given, so its own samples soon outweigh it (2).
     float    seedMinSamples;                ///< The samples a coarser brick needs before a new one is seeded from it (4).
-    const FfxBrixelizerGIMover* movers;     ///< Bodies that moved since the updated cascade's last bake, at most FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS.
+    const FfxBrixelizerGIMover* movers;     ///< Bodies that moved since the updated cascades' last bakes, at most FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS a level.
     uint32_t numMovers;
+    uint32_t moverSourceCascadeOffset;      ///< How far below a merged cascade the one the moving bodies are baked into is (ClaimMover carries only that cascade's bricks); 0: any brick in a mover's bounds.
 
     FfxBrixelizerRawContext *brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDispatchDescription;

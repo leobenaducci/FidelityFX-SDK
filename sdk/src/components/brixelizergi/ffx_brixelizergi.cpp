@@ -1241,7 +1241,7 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
              FFX_RESOURCE_TYPE_BUFFER,
              FFX_RESOURCE_USAGE_UAV,
              FFX_SURFACE_FORMAT_R32_FLOAT,
-             2 * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * sizeof(FfxUInt32),
+             3 * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * sizeof(FfxUInt32),
              sizeof(FfxUInt32),
              1,
              FFX_RESOURCE_FLAGS_NONE},
@@ -1498,7 +1498,7 @@ ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext
 // (ffx_brixelizergi_cache_slots.h), then the placement it now has is what the next time compares against.
 static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, const FfxBrixelizerGIDispatchDescription* pDispatchDescription, const FfxBrixelizerContextInfo* pContextInfo)
 {
-    static FfxBrixelizerGISlotConstants constants;   // 40 KB: not on the stack
+    FfxBrixelizerGISlotConstants& constants = pContext->slotConstants;
     constexpr uint32_t voxels = FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION;
 
     for (uint32_t level = 0; level < FFX_BRIXELIZER_GI_SLOT_LEVELS; ++level)
@@ -1529,22 +1529,29 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         constants.seed_radiance         = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE) ? 1u : 0u;
         constants.seed_min_samples      = pDispatchDescription->seedMinSamples;
         constants.claim_tag             = ++pContext->slotClaimTag;
+        constants.mover_source_cascade  = pDispatchDescription->moverSourceCascadeOffset != 0 && cascadeIndex >= pDispatchDescription->moverSourceCascadeOffset
+                                              ? cascadeIndex - pDispatchDescription->moverSourceCascadeOffset
+                                              : 0xffffffffu;
 
-        constants.num_movers = pDispatchDescription->movers ? (pDispatchDescription->numMovers < FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS ? pDispatchDescription->numMovers : FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS) : 0u;
-        for (uint32_t m = 0; m < constants.num_movers; ++m)
+        // This level's movers: each transform is from the last bake of the levels its mask names.
+        constants.num_movers = 0;
+        for (uint32_t m = 0; pDispatchDescription->movers && m < pDispatchDescription->numMovers && constants.num_movers < FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS; ++m)
         {
             const FfxBrixelizerGIMover& mover = pDispatchDescription->movers[m];
-            memcpy(constants.movers[m].transform_row0, mover.currentToPrevious + 0, 4 * sizeof(float));
-            memcpy(constants.movers[m].transform_row1, mover.currentToPrevious + 4, 4 * sizeof(float));
-            memcpy(constants.movers[m].transform_row2, mover.currentToPrevious + 8, 4 * sizeof(float));
-            memcpy(constants.movers[m].bounds_min, mover.boundsMin, 3 * sizeof(float));
-            memcpy(constants.movers[m].bounds_max, mover.boundsMax, 3 * sizeof(float));
+            if (mover.levelMask != 0 && !(mover.levelMask & (1u << level)))
+                continue;
+            FfxBrixelizerGISlotMover& slotMover = constants.movers[constants.num_movers++];
+            memcpy(slotMover.transform_row0, mover.currentToPrevious + 0, 4 * sizeof(float));
+            memcpy(slotMover.transform_row1, mover.currentToPrevious + 4, 4 * sizeof(float));
+            memcpy(slotMover.transform_row2, mover.currentToPrevious + 8, 4 * sizeof(float));
+            memcpy(slotMover.bounds_min, mover.boundsMin, 3 * sizeof(float));
+            memcpy(slotMover.bounds_max, mover.boundsMax, 3 * sizeof(float));
         }
         updateConstantBuffer(pContext, FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_SLOT_CONSTANTS, (void*)&constants);
 
         const uint32_t groups = voxels / 64;
-        scheduleDispatch(pContext, &pContext->pipelineSlotsClaimSame, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsClaimMover, groups, 1, 1);
+        scheduleDispatch(pContext, &pContext->pipelineSlotsClaimSame, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsFree, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsAlloc, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsApply, groups, 1, 1);

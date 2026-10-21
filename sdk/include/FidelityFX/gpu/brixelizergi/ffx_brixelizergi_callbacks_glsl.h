@@ -572,6 +572,7 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID)
 #if defined BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS
     layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS, std430) coherent buffer BrixelizerGISlotCounters_t { FfxUInt32 data[]; } g_rw_slot_counters;
     FfxUInt32 SlotCounterAdd(FfxUInt32 index, FfxUInt32 value) { return atomicAdd(g_rw_slot_counters.data[index], value); }
+    FfxUInt32 SlotCounterExchange(FfxUInt32 index, FfxUInt32 value) { return atomicExchange(g_rw_slot_counters.data[index], value); }
     FfxUInt32 SlotCounterLoad(FfxUInt32 index) { return g_rw_slot_counters.data[index]; }
 #endif
 #if defined BRIXELIZER_GI_BIND_UAV_BRICK_SLOT_MAP

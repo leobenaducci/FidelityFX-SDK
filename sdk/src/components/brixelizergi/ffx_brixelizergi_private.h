@@ -23,6 +23,7 @@
 #pragma once
 
 #include <FidelityFX/gpu/ffx_core.h>
+#include <FidelityFX/gpu/brixelizergi/ffx_brixelizergi_host_interface.h>
 
 #define FFX_BRIXELIZER_GI_SLOT_LEVELS       8
 #define FFX_BRIXELIZER_GI_SCREEN_PROBE_SIZE 8
@@ -95,4 +96,5 @@ FfxGpuJobDescription               gpuJobDescription;
         float      voxelSize;
         uint32_t   clipmapOffset[3];
     } slotLevels[FFX_BRIXELIZER_GI_SLOT_LEVELS];
+    FfxBrixelizerGISlotConstants       slotConstants;   // staged from here: 40 KB
 } FfxBrixelizerGIContext_Private;
