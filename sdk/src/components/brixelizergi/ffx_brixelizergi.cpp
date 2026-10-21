@@ -1529,9 +1529,7 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         constants.seed_radiance         = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE) ? 1u : 0u;
         constants.seed_min_samples      = pDispatchDescription->seedMinSamples;
         constants.claim_tag             = ++pContext->slotClaimTag;
-        constants.mover_source_cascade  = pDispatchDescription->moverSourceCascadeOffset != 0 && cascadeIndex >= pDispatchDescription->moverSourceCascadeOffset
-                                              ? cascadeIndex - pDispatchDescription->moverSourceCascadeOffset
-                                              : 0xffffffffu;
+        constants.static_source_cascade = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC) ? level : 0xffffffffu;
 
         // This level's movers: each transform is from the last bake of the levels its mask names.
         constants.num_movers = 0;

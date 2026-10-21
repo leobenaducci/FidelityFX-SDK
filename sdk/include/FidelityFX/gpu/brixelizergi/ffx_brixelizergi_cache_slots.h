@@ -61,7 +61,8 @@ FfxUInt32 FfxBrixelizerGISlotsLoadBrickMap(FfxUInt32 cascade_idx, FfxUInt32 elem
         const FfxUInt32 uniform_idx = ffxWaveReadLaneFirstU1(cascade_idx);
         if (uniform_idx == cascade_idx)
         {
-            value = LoadCascadeBrickMapArrayUniform(uniform_idx, element_index);
+            // Clamped: a caller's invalid index (0xffffffff) must never reach the descriptor array, even speculatively.
+            value = LoadCascadeBrickMapArrayUniform(min(uniform_idx, FfxUInt32(FFX_BRIXELIZER_MAX_CASCADES - 1)), element_index);
             break;
         }
     }
@@ -139,10 +140,10 @@ void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
     const FfxUInt32 brick = FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell);
     if (!FfxBrixelizerIsValidID(brick))
         return;
-    // Only a brick of the cascade the moving bodies are baked into: a static one in a mover's (padded) bounds is the floor under it, and keeps its
-    // own voxel's cache.
-    if (GetSlotConstants().mover_source_cascade != 0xffffffffu &&
-        FfxBrixelizerGetVoxelCascade(LoadBricksVoxelMap(FfxBrixelizerBrickGetIndex(brick))) != GetSlotConstants().mover_source_cascade)
+    // Not a brick of the level's static cascade: one in a mover's (padded) bounds is the floor under it, and keeps its own voxel's cache. The
+    // moving bodies' are the mover or dynamic cascade's, or a merge of them (in the dynamic brick, or a transient one of the merged cascade).
+    if (GetSlotConstants().static_source_cascade != 0xffffffffu &&
+        FfxBrixelizerGetVoxelCascade(LoadBricksVoxelMap(FfxBrixelizerBrickGetIndex(brick))) == GetSlotConstants().static_source_cascade)
         return;
 
     // A new brick on a body that has moved since this cascade's last bake: its content was where the motion takes it back to.

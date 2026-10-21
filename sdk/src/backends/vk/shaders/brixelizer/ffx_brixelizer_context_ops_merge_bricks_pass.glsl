@@ -29,6 +29,8 @@
 #define BRIXELIZER_BIND_UAV_CONTEXT_COUNTERS                        2001
 #define BRIXELIZER_BIND_UAV_SDF_ATLAS                               2002
 
+#define BRIXELIZER_BIND_CB_BUILD_INFO                               3000
+
 #include "ffx_brixelizer_callbacks_glsl.h"
 #include "ffx_brixelizer_context_ops.h"
 

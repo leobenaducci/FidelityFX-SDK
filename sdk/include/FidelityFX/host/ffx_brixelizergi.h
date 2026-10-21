@@ -123,6 +123,7 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_CARRY        = (1 << 0),  ///< A brick keeps its voxel's cache; without, every brick gets a new slot, zeroed.
     FFX_BRIXELIZER_GI_CACHE_SEED_COARSER = (1 << 1),  ///< A new brick is seeded from the next coarser cascade's brick there.
     FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE = (1 << 2), ///< The seed fills the radiance cache too.
+    FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC = (1 << 3), ///< A static brick in a mover's bounds keeps its voxel's slot: level L's static cascade is raw cascade L (ffxBrixelizerGetCascadeIndices' layout, with a static cascade at every level).
 } FfxBrixelizerGICacheFlags;
 
 /// vkfw patch: a body that moved since a merged cascade's last bake: a voxel of it inside the bounds was, then, at the point the transform takes it to.
@@ -201,7 +202,6 @@ typedef struct FfxBrixelizerGIDispatchDescription
     float    seedMinSamples;                ///< The samples a coarser brick needs before a new one is seeded from it (4).
     const FfxBrixelizerGIMover* movers;     ///< Bodies that moved since the updated cascades' last bakes, at most FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS a level.
     uint32_t numMovers;
-    uint32_t moverSourceCascadeOffset;      ///< How far below a merged cascade the one the moving bodies are baked into is (ClaimMover carries only that cascade's bricks); 0: any brick in a mover's bounds.
 
     FfxBrixelizerRawContext *brixelizerContext; ///< A pointer to the Brixelizer context for use with Brixelizer GI.
 } FfxBrixelizerGIDispatchDescription;

@@ -985,7 +985,7 @@ static FfxErrorCode brixelizerCreate(FfxBrixelizerRawContext_Private* context, c
              FFX_RESOURCE_TYPE_BUFFER,
              FFX_RESOURCE_USAGE_UAV,
              FFX_SURFACE_FORMAT_R32_FLOAT,
-             context->totalBricks * sizeof(uint32_t) * 2,
+             (context->totalBricks * 2 > FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * 4 ? context->totalBricks * 2 : FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * 4) * sizeof(uint32_t),
              sizeof(uint32_t),
              1,
              FFX_RESOURCE_FLAGS_NONE },
@@ -1586,6 +1586,36 @@ static FfxErrorCode brixelizerDispatchMergeCascades(FfxBrixelizerRawContext_Priv
     return FFX_OK;
 }
 
+// vkfw patch: the three-way merge (merge_mode 1 of the merge passes).
+static FfxErrorCode brixelizerDispatchMergeCascades3(FfxBrixelizerRawContext_Private* context, uint32_t srcS, uint32_t srcM, uint32_t srcD, uint32_t dstCascadeIdx)
+{
+    const uint32_t first = srcS != UINT32_MAX ? srcS : (srcM != UINT32_MAX ? srcM : srcD);
+    if (first == UINT32_MAX)
+        return FFX_ERROR_INVALID_ARGUMENT;
+
+    FfxBrixelizerCascade_Private& srcCascade = context->cascades[first];
+    FfxBrixelizerCascade_Private& dstCascade = context->cascades[dstCascadeIdx];
+
+    FfxBrixelizerCascadeInfo tmp = dstCascade.info;
+    dstCascade.info              = srcCascade.info;  // the sources share the level's placement; dst keeps its own index
+    dstCascade.info.index        = tmp.index;
+
+    FfxBrixelizerBuildInfo buildInfo = {};
+    buildInfo.dst_cascade   = dstCascadeIdx;
+    buildInfo.src_cascade_A = srcS;
+    buildInfo.src_cascade_B = srcM;
+    buildInfo.src_cascade_C = srcD;
+    buildInfo.merge_mode    = 1;
+
+    updateConstantBuffer(context, FFX_BRIXELIZER_CONSTANTBUFFER_IDENTIFIER_BUILD_INFO, &buildInfo);
+
+    scheduleDispatch(context, &context->pipelineContextMergeCascades, (FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION + 63) / 64, 1, 1, 0);
+    scheduleDispatch(context, &context->pipelineContextPrepareMergeBricksArgs, 1, 1, 1, 0);
+    scheduleIndirectDispatch(context, &context->pipelineContextMergeBricks, context->resources[FFX_BRIXELIZER_RESOURCE_IDENTIFIER_INDIRECT_ARGS_1], FFX_BRIXELIZER_INDIRECT_OFFSETS_MERGE_BRICKS, 0);
+
+    return FFX_OK;
+}
+
 static FfxErrorCode brixelizerDispatchBuildAABBTree(FfxBrixelizerRawContext_Private* context, uint32_t cascadeIdx)
 {
     FfxBrixelizerCascade_Private *cascade = &context->cascades[cascadeIdx];
@@ -1961,6 +1991,17 @@ FfxErrorCode ffxBrixelizerRawContextMergeCascades(FfxBrixelizerRawContext* conte
     // dispatch the Brixelizer passes.
     const FfxErrorCode errorCode = brixelizerDispatchMergeCascades(contextPrivate, srcCascadeAIdx, srcCascadeBIdx, dstCascadeIdx);
     return errorCode;
+}
+
+FfxErrorCode ffxBrixelizerRawContextMergeCascades3(FfxBrixelizerRawContext* context, uint32_t srcCascadeS, uint32_t srcCascadeM, uint32_t srcCascadeD, uint32_t dstCascade)
+{
+    FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
+
+    FfxBrixelizerRawContext_Private* contextPrivate = (FfxBrixelizerRawContext_Private*)(context);
+
+    FFX_RETURN_ON_ERROR(contextPrivate->device, FFX_ERROR_NULL_DEVICE);
+
+    return brixelizerDispatchMergeCascades3(contextPrivate, srcCascadeS, srcCascadeM, srcCascadeD, dstCascade);
 }
 
 FfxErrorCode ffxBrixelizerRawContextBuildAABBTree(FfxBrixelizerRawContext* context, uint32_t cascadeIndex)

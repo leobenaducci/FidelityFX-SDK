@@ -34,17 +34,20 @@
 // Anything further added to the private context has to come back here and redo that arithmetic;
 // the FFX_STATIC_ASSERT below ffx_brixelizer.cpp's context struct is what catches it, at compile
 // time rather than as a buffer overrun at run time.
-#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6069910)
+// vkfw patch: 6069910 -> 6201006 for the mover cascades: FfxBrixelizerInstance and FfxBrixelizerInvalidation gain a uint32 each
+// (2 * 65536) and FfxBrixelizerCascadePrivate a mover index (24).
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6201006)
 
 /// The size of the update description specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
 #if defined(_WIN32)
-#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 2099376
+// vkfw patch: + numMoverJobs and moverJobs[2 * FFX_BRIXELIZER_MAX_INSTANCES] (1 + 131072 * 8 uint32s, and 1 of padding: measured 12591816 bytes).
+#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 3147954
 #else
 // vkfw patch: the same private struct under the LP64 ABI (measured with GCC on x86-64 Linux);
 // ffx_brixelizer.cpp asserts the two sizes are equal.
-#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 2100976
+#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 3149554
 #endif
 
 #ifdef __cplusplus
@@ -82,6 +85,10 @@ typedef struct FfxBrixelizerAABB {
 typedef enum FfxBrixelizerCascadeFlag {
     FFX_BRIXELIZER_CASCADE_STATIC  = (1 << 0),
     FFX_BRIXELIZER_CASCADE_DYNAMIC = (1 << 1),
+    /// vkfw patch: a cascade of the instances created with FFX_BRIXELIZER_INSTANCE_FLAG_MOVER: persistent like static ones, rebuilt where they
+    /// move, so that a moving body does not rebuild the static cascade under it. A level with no mover cascade takes its movers into its static
+    /// one. Every level, whatever its flags, has a merged cascade of its own: its sources merged three ways (ffxBrixelizerRawContextMergeCascades3).
+    FFX_BRIXELIZER_CASCADE_MOVER   = (1 << 2),
 } FfxBrixelizerCascadeFlag;
 
 /// A structure encapsulating the parameters for cascade creation.
@@ -182,6 +189,9 @@ typedef enum FfxBrixelizerInstanceFlags {
     /// literally, so a caller can also name cascade 0 on its own, which no "0 means unset"
     /// convention could express.
     FFX_BRIXELIZER_INSTANCE_FLAG_CASCADE_RANGE = 1 << 1,
+    /// vkfw patch: a persistent instance (it has an id, and is deleted like a static one) baked into the mover cascades
+    /// (FFX_BRIXELIZER_CASCADE_MOVER), or the static cascade at a level that has none.
+    FFX_BRIXELIZER_INSTANCE_FLAG_MOVER = 1 << 2,
 } FfxBrixelizerInstanceFlags;
 
 /// A structure encapsulating the parameters necessary to create an instance with Brixelizer.
@@ -359,6 +369,13 @@ FFX_API FfxErrorCode ffxBrixelizerDeleteInstances(FfxBrixelizerContext* context,
 ///
 /// @ingroup ffxBrixelizer
 FFX_API FfxErrorCode ffxBrixelizerGetRawContext(FfxBrixelizerContext* context, FfxBrixelizerRawContext** outContext);
+
+/// vkfw patch: the raw cascades of a level (a logical cascade): its static, mover and dynamic sources (0xffffffff where it has none) and the merged
+/// cascade they are merged into, which is what tracing and GI read. The layout is [static][mover][dynamic][merged], each in level order, so the
+/// merged cascades are contiguous and level L's static cascade, if every level has one, is L.
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerGetCascadeIndices(FfxBrixelizerContext* context, uint32_t level, uint32_t* staticIndex, uint32_t* moverIndex, uint32_t* dynamicIndex, uint32_t* mergedIndex);
 
 #ifdef __cplusplus
 }

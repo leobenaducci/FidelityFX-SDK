@@ -57,6 +57,9 @@ typedef struct FfxBrixelizerBakedUpdateDescription_Private {
     FfxBrixelizerRawJobDescription                 staticJobs[3 * FFX_BRIXELIZER_MAX_INSTANCES];
     uint32_t                            numDynamicJobs;
     FfxBrixelizerRawJobDescription                 dynamicJobs[FFX_BRIXELIZER_MAX_INSTANCES];
+    // vkfw patch: the mover cascade's jobs: its instances and its invalidations.
+    uint32_t                            numMoverJobs;
+    FfxBrixelizerRawJobDescription                 moverJobs[2 * FFX_BRIXELIZER_MAX_INSTANCES];
 } FfxBrixelizerBakedUpdateDescription_Private;
 
 FFX_STATIC_ASSERT(sizeof(FfxBrixelizerBakedUpdateDescription) == sizeof(FfxBrixelizerBakedUpdateDescription_Private));
@@ -67,11 +70,13 @@ typedef struct FfxBrixelizerCascadePrivate {
     uint32_t                 staticIndex;
     uint32_t                 dynamicIndex;
     uint32_t                 mergedIndex;
+    uint32_t                 moverIndex;    // vkfw patch
 } FfxBrixelizerCascadePrivate;
 
 typedef struct FfxBrixelizerInvalidation {
-    uint32_t          cascades;
+    uint32_t          cascades;         // the levels whose static cascade it still has to clear
     FfxBrixelizerAABB aabb;
+    uint32_t          moverCascades;    // vkfw patch: the levels whose mover cascade it still has to clear
 } FfxBrixelizerInvalidation;
 
 typedef struct FfxBrixelizerInstance {
@@ -82,7 +87,15 @@ typedef struct FfxBrixelizerInstance {
     // which is what every instance used to get.
     uint32_t                minCascade;
     uint32_t                maxCascade;
+    // vkfw patch: FFX_BRIXELIZER_INSTANCE_FLAG_MOVER: baked into the mover cascades (the static one at a level without).
+    uint32_t                isMover;
 } FfxBrixelizerInstance;
+
+// vkfw patch: whether a persistent instance is baked into a level's static cascade: a static one, or a mover at a level without a mover cascade.
+static bool instanceInStaticCascade(const FfxBrixelizerInstance *instance, FfxBrixelizerCascadeFlag levelFlags)
+{
+    return !instance->isMover || !(levelFlags & FFX_BRIXELIZER_CASCADE_MOVER);
+}
 
 // vkfw patch: whether an instance is submitted to this logical cascade at all.
 static bool instanceInCascade(const FfxBrixelizerInstance *instance, uint32_t cascadeIndex)
@@ -130,34 +143,34 @@ FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* d
     outContext->dynamicInstanceStartIndex = FFX_ARRAY_ELEMENTS(outContext->instances);
     RETURN_ON_FAIL(ffxBrixelizerRawContextCreate(&outContext->context, &rawDesc));
 
-    uint32_t numStaticAndDynamicCascades = 0;
-    uint32_t numMergedCascades = desc->numCascades;
+    // vkfw patch: [static][mover][dynamic][merged], each in level order, and a merged cascade for every level (ffxBrixelizerGetCascadeIndices).
+    const uint32_t sourceFlags = FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_MOVER | FFX_BRIXELIZER_CASCADE_DYNAMIC;
+    uint32_t numStatic = 0, numMover = 0, numDynamic = 0;
     ifor (desc->numCascades) {
         FfxBrixelizerCascadeFlag cascadeFlags = desc->cascadeDescs[i].flags;
-        if (!cascadeFlags) { return FFX_ERROR_INVALID_ARGUMENT; }
-        if ((cascadeFlags & (FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC)) == (FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC)) {
-            ++numStaticAndDynamicCascades;
-        }
+        if (!(cascadeFlags & sourceFlags)) { return FFX_ERROR_INVALID_ARGUMENT; }
+        numStatic  += (cascadeFlags & FFX_BRIXELIZER_CASCADE_STATIC) ? 1 : 0;
+        numMover   += (cascadeFlags & FFX_BRIXELIZER_CASCADE_MOVER) ? 1 : 0;
+        numDynamic += (cascadeFlags & FFX_BRIXELIZER_CASCADE_DYNAMIC) ? 1 : 0;
     }
-    uint32_t numCascades = 2 * numStaticAndDynamicCascades + numMergedCascades;
-    if (numCascades > FFX_BRIXELIZER_MAX_CASCADES) {
+    if (numStatic + numMover + numDynamic + desc->numCascades > FFX_BRIXELIZER_MAX_CASCADES) {
         return FFX_ERROR_INVALID_ARGUMENT;
     }
 
-    uint32_t staticCascadeIndex = 0;
-    uint32_t dynamicCascadeIndex = numStaticAndDynamicCascades;
-    uint32_t mergedCascadeIndex = 2 * numStaticAndDynamicCascades;
+    uint32_t staticCascadeIndex  = 0;
+    uint32_t moverCascadeIndex   = numStatic;
+    uint32_t dynamicCascadeIndex = numStatic + numMover;
+    uint32_t mergedCascadeIndex  = numStatic + numMover + numDynamic;
     ifor (desc->numCascades) {
         const FfxBrixelizerCascadeDescription *cascadeDesc = &desc->cascadeDescs[i];
 
         FfxBrixelizerCascadePrivate *cascadePrivate = &outContext->cascades[i];
         cascadePrivate->flags = cascadeDesc->flags;
-        cascadePrivate->staticIndex = (uint32_t)-1;
-        cascadePrivate->dynamicIndex = (uint32_t)-1;
-        cascadePrivate->mergedIndex = (uint32_t)-1;
         cascadePrivate->voxelSize = cascadeDesc->voxelSize;
-
-        uint32_t flags = cascadeDesc->flags & (FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC);
+        cascadePrivate->staticIndex  = (cascadeDesc->flags & FFX_BRIXELIZER_CASCADE_STATIC) ? staticCascadeIndex++ : (uint32_t)-1;
+        cascadePrivate->moverIndex   = (cascadeDesc->flags & FFX_BRIXELIZER_CASCADE_MOVER) ? moverCascadeIndex++ : (uint32_t)-1;
+        cascadePrivate->dynamicIndex = (cascadeDesc->flags & FFX_BRIXELIZER_CASCADE_DYNAMIC) ? dynamicCascadeIndex++ : (uint32_t)-1;
+        cascadePrivate->mergedIndex  = mergedCascadeIndex++;
 
         FfxBrixelizerRawCascadeDescription rawCascadeDesc = {};
         rawCascadeDesc.brickSize = cascadeDesc->voxelSize;
@@ -165,28 +178,12 @@ FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* d
             rawCascadeDesc.cascadeMin[i] = (floorf(desc->sdfCenter[i] / cascadeDesc->voxelSize) - (0.5f * (float)FFX_BRIXELIZER_CASCADE_RESOLUTION)) * cascadePrivate->voxelSize;
         }
 
-        switch (flags) {
-        case (FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC):
-            cascadePrivate->staticIndex = staticCascadeIndex++;
-            cascadePrivate->dynamicIndex = dynamicCascadeIndex++;
-            cascadePrivate->mergedIndex = mergedCascadeIndex++;
-
-            rawCascadeDesc.index = cascadePrivate->staticIndex;
+        const uint32_t indices[] = { cascadePrivate->staticIndex, cascadePrivate->moverIndex, cascadePrivate->dynamicIndex, cascadePrivate->mergedIndex };
+        for (uint32_t index : indices) {
+            if (index == (uint32_t)-1) continue;
+            rawCascadeDesc.index = index;
             RETURN_ON_FAIL(ffxBrixelizerRawContextCreateCascade(&outContext->context, &rawCascadeDesc));
-
-            rawCascadeDesc.index = cascadePrivate->dynamicIndex;
-            RETURN_ON_FAIL(ffxBrixelizerRawContextCreateCascade(&outContext->context, &rawCascadeDesc));
-            break;
-        case FFX_BRIXELIZER_CASCADE_STATIC:
-            cascadePrivate->mergedIndex = cascadePrivate->staticIndex = mergedCascadeIndex++;
-            break;
-        case FFX_BRIXELIZER_CASCADE_DYNAMIC:
-            cascadePrivate->mergedIndex = cascadePrivate->dynamicIndex = mergedCascadeIndex++;
-            break;
         }
-
-        rawCascadeDesc.index = cascadePrivate->mergedIndex;
-        RETURN_ON_FAIL(ffxBrixelizerRawContextCreateCascade(&outContext->context, &rawCascadeDesc));
     }
 
     outContext->numCascades = desc->numCascades;
@@ -251,7 +248,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         ifor (context->numStaticInstances) {
             FfxBrixelizerInstance *instance = &context->instances[i];
             // vkfw patch: cascadeIndex is the logical cascade, which is the granularity the band names.
-            if (instanceInCascade(instance, cascadeIndex) && aabbsOverlap(instance->aabb, casacadeAABB)) {
+            if (instanceInStaticCascade(instance, cascadePrivate->flags) && instanceInCascade(instance, cascadeIndex) && aabbsOverlap(instance->aabb, casacadeAABB)) {
                 FfxBrixelizerRawJobDescription job = {};
                 ifor (3) {
                     job.aabbMin[i] = instance->aabb.min[i];
@@ -282,7 +279,53 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
                     FFX_ASSERT(outDesc->numStaticJobs <= FFX_ARRAY_ELEMENTS(outDesc->staticJobs));
                 }
                 invalidation->cascades &= ~cascadeMask;
-                if (!invalidation->cascades) {
+                if (!invalidation->cascades && !invalidation->moverCascades) {
+                    context->invalidations[curInvalidation] = context->invalidations[--context->numInvalidations];
+                    continue;
+                }
+            }
+            ++curInvalidation;
+        }
+    }
+
+    // vkfw patch: create mover jobs, as the static ones but for the mover instances and the mover invalidations
+    outDesc->numMoverJobs = 0;
+    if (cascadePrivate->flags & FFX_BRIXELIZER_CASCADE_MOVER) {
+        FfxBrixelizerRawJobDescription *curJob = outDesc->moverJobs;
+
+        ifor (context->numStaticInstances) {
+            FfxBrixelizerInstance *instance = &context->instances[i];
+            if (instance->isMover && instanceInCascade(instance, cascadeIndex) && aabbsOverlap(instance->aabb, casacadeAABB)) {
+                FfxBrixelizerRawJobDescription job = {};
+                ifor (3) {
+                    job.aabbMin[i] = instance->aabb.min[i];
+                    job.aabbMax[i] = instance->aabb.max[i];
+                }
+                job.instanceIdx = instance->id;
+                *curJob++ = job;
+                outDesc->numMoverJobs++;
+                FFX_ASSERT(outDesc->numMoverJobs <= FFX_ARRAY_ELEMENTS(outDesc->moverJobs));
+            }
+        }
+
+        uint32_t cascadeMask = 1 << cascadeIndex;
+        uint32_t curInvalidation = 0;
+        while (curInvalidation < context->numInvalidations) {
+            FfxBrixelizerInvalidation *invalidation = &context->invalidations[curInvalidation];
+            if (invalidation->moverCascades & cascadeMask) {
+                if (aabbsOverlap(invalidation->aabb, casacadeAABB)) {
+                    FfxBrixelizerRawJobDescription job = {};
+                    ifor (3) {
+                        job.aabbMin[i] = invalidation->aabb.min[i];
+                        job.aabbMax[i] = invalidation->aabb.max[i];
+                    }
+                    job.flags = FFX_BRIXELIZER_RAW_JOB_FLAG_INVALIDATE;
+                    *curJob++ = job;
+                    outDesc->numMoverJobs++;
+                    FFX_ASSERT(outDesc->numMoverJobs <= FFX_ARRAY_ELEMENTS(outDesc->moverJobs));
+                }
+                invalidation->moverCascades &= ~cascadeMask;
+                if (!invalidation->cascades && !invalidation->moverCascades) {
                     context->invalidations[curInvalidation] = context->invalidations[--context->numInvalidations];
                     continue;
                 }
@@ -314,7 +357,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
     }
 
     if (desc->outScratchBufferSize) {
-        size_t staticSize = 0, dynamicSize = 0;
+        size_t staticSize = 0, dynamicSize = 0, moverSize = 0;
 
         FfxBrixelizerRawCascadeUpdateDescription *cascadeUpdateDesc = &outDesc->cascadeUpdateDesc;
         uint32_t cascadeIndex = cascadeUpdateDesc->cascadeIndex;
@@ -332,7 +375,15 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
             FFX_VALIDATE(ffxBrixelizerRawContextGetScratchMemorySize(&context->context, cascadeUpdateDesc, &dynamicSize));
         }
 
-        *desc->outScratchBufferSize = staticSize > dynamicSize ? staticSize : dynamicSize;
+        if (context->cascades[cascadeIndex].flags & FFX_BRIXELIZER_CASCADE_MOVER) {
+            cascadeUpdateDesc->numJobs = outDesc->numMoverJobs;
+            cascadeUpdateDesc->jobs = outDesc->moverJobs;
+            cascadeUpdateDesc->flags = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_NONE;
+            FFX_VALIDATE(ffxBrixelizerRawContextGetScratchMemorySize(&context->context, cascadeUpdateDesc, &moverSize));
+        }
+
+        size_t scratchSize = staticSize > dynamicSize ? staticSize : dynamicSize;
+        *desc->outScratchBufferSize = scratchSize > moverSize ? scratchSize : moverSize;
     }
 
     return FFX_OK;
@@ -349,6 +400,7 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
     FfxBrixelizerCascadePrivate *cascadePrivate = &context->cascades[cascadeIndex];
 
     uint32_t staticCascadeIndex  = cascadePrivate->staticIndex;
+    uint32_t moverCascadeIndex   = cascadePrivate->moverIndex;
     uint32_t dynamicCascadeIndex = cascadePrivate->dynamicIndex;
     uint32_t mergedCascadeIndex  = cascadePrivate->mergedIndex;
     uint32_t flags = cascadePrivate->flags;
@@ -366,6 +418,15 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
         ffxBrixelizerRawContextUpdateCascade(&context->context, &desc->cascadeUpdateDesc);
     }
 
+    // vkfw patch: update mover cascade (persistent, as the static one)
+    if (flags & FFX_BRIXELIZER_CASCADE_MOVER) {
+        desc->cascadeUpdateDesc.cascadeIndex = moverCascadeIndex;
+        desc->cascadeUpdateDesc.numJobs = desc->numMoverJobs;
+        desc->cascadeUpdateDesc.jobs = desc->moverJobs;
+        desc->cascadeUpdateDesc.flags = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_NONE;
+        ffxBrixelizerRawContextUpdateCascade(&context->context, &desc->cascadeUpdateDesc);
+    }
+
     // update dynamic cascade
     if (flags & FFX_BRIXELIZER_CASCADE_DYNAMIC) {
         desc->cascadeUpdateDesc.cascadeIndex = dynamicCascadeIndex;
@@ -376,26 +437,18 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
     }
 
 
-    switch (flags & (FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC)) {
-    case (FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC):
-        if (desc->debugVisualizationDesc)
+    // vkfw patch: every level merges its sources three ways into its own merged cascade.
+    if (desc->debugVisualizationDesc)
+    {
+        const uint32_t sources[] = { staticCascadeIndex, moverCascadeIndex, dynamicCascadeIndex };
+        for (uint32_t source : sources)
         {
-            ffxBrixelizerRawContextBuildAABBTree(&context->context, staticCascadeIndex);
-            ffxBrixelizerRawContextBuildAABBTree(&context->context, dynamicCascadeIndex);
+            if (source != (uint32_t)-1)
+                ffxBrixelizerRawContextBuildAABBTree(&context->context, source);
         }
-        ffxBrixelizerRawContextMergeCascades(&context->context, staticCascadeIndex, dynamicCascadeIndex, mergedCascadeIndex);
-        ffxBrixelizerRawContextBuildAABBTree(&context->context, mergedCascadeIndex);
-        break;
-    case FFX_BRIXELIZER_CASCADE_STATIC:
-        ffxBrixelizerRawContextBuildAABBTree(&context->context, staticCascadeIndex);
-        break;
-    case FFX_BRIXELIZER_CASCADE_DYNAMIC:
-        ffxBrixelizerRawContextBuildAABBTree(&context->context, dynamicCascadeIndex);
-        break;
-    default:
-        FFX_ASSERT(0);
-        break;
     }
+    ffxBrixelizerRawContextMergeCascades3(&context->context, staticCascadeIndex, moverCascadeIndex, dynamicCascadeIndex, mergedCascadeIndex);
+    ffxBrixelizerRawContextBuildAABBTree(&context->context, mergedCascadeIndex);
 
     ffxBrixelizerRawContextEnd(&context->context);
 
@@ -428,22 +481,8 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
         if (desc->populateDebugAABBsFlags & (FFX_BRIXELIZER_POPULATE_AABBS_CASCADE_AABBS)) {
             for (uint32_t i = 0; i < context->numCascades; ++i) {
                 FfxBrixelizerCascadePrivate *cascade = &context->cascades[i];
-                switch (cascade->flags & (FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC)) {
-                case FFX_BRIXELIZER_CASCADE_STATIC:
-                    if (!debugVisDesc.cascadeDebugAABB[cascade->staticIndex]) {
-                        debugVisDesc.cascadeDebugAABB[cascade->staticIndex] = FFX_BRIXELIZER_CASCADE_DEBUG_AABB_BOUNDING_BOX;
-                    }
-                    break;
-                case FFX_BRIXELIZER_CASCADE_DYNAMIC:
-                    if (!debugVisDesc.cascadeDebugAABB[cascade->dynamicIndex]) {
-                        debugVisDesc.cascadeDebugAABB[cascade->dynamicIndex] = FFX_BRIXELIZER_CASCADE_DEBUG_AABB_BOUNDING_BOX;
-                    }
-                    break;
-                case FFX_BRIXELIZER_CASCADE_STATIC | FFX_BRIXELIZER_CASCADE_DYNAMIC:
-                    if (!debugVisDesc.cascadeDebugAABB[cascade->mergedIndex]) {
-                        debugVisDesc.cascadeDebugAABB[cascade->mergedIndex] = FFX_BRIXELIZER_CASCADE_DEBUG_AABB_BOUNDING_BOX;
-                    }
-                    break;
+                if (!debugVisDesc.cascadeDebugAABB[cascade->mergedIndex]) {
+                    debugVisDesc.cascadeDebugAABB[cascade->mergedIndex] = FFX_BRIXELIZER_CASCADE_DEBUG_AABB_BOUNDING_BOX;
                 }
             }
         }
@@ -482,6 +521,16 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
             desc->outStats->staticCascadeStats.trianglesAllocated = scratchCounters.triangles;
             desc->outStats->staticCascadeStats.referencesAllocated = scratchCounters.references;
             desc->outStats->staticCascadeStats.bricksAllocated = scratchCounters.numBricksAllocated;
+            desc->outStats->contextStats.brickAllocationsSucceeded += scratchCounters.clearBricks;
+        }
+
+        // vkfw patch: the mover cascade's bake counts into the static cascade's stats.
+        if (flags & FFX_BRIXELIZER_CASCADE_MOVER) {
+            FfxBrixelizerScratchCounters scratchCounters = {};
+            ffxBrixelizerRawContextGetCascadeCounters(&context->context, moverCascadeIndex, &scratchCounters);
+            desc->outStats->staticCascadeStats.trianglesAllocated += scratchCounters.triangles;
+            desc->outStats->staticCascadeStats.referencesAllocated += scratchCounters.references;
+            desc->outStats->staticCascadeStats.bricksAllocated += scratchCounters.numBricksAllocated;
             desc->outStats->contextStats.brickAllocationsSucceeded += scratchCounters.clearBricks;
         }
 
@@ -542,20 +591,32 @@ static void resolveCascadeRange(const FfxBrixelizerContext_Private *context,
     *outMaxCascade = maxCascade;
 }
 
-static void addInvalidationJob(FfxBrixelizerContext_Private* context, FfxBrixelizerAABB aabb, uint32_t minCascade, uint32_t maxCascade)
+static void addInvalidationJob(FfxBrixelizerContext_Private* context, FfxBrixelizerAABB aabb, uint32_t minCascade, uint32_t maxCascade, uint32_t isMover)
 {
     FfxBrixelizerInvalidation invalidation = {};
 
     uint32_t cascadesMask = 0;
+    uint32_t moverCascadesMask = 0;
     ifor (context->numCascades) {
         // vkfw patch: only the cascades this instance's band reaches. An invalidation outside it
         // clears bricks the instance never put anything into, and each one costs a job on that
         // cascade's next turn.
-        if ((context->cascades[i].flags & FFX_BRIXELIZER_CASCADE_STATIC) && i >= minCascade && i <= maxCascade) {
+        if (i < minCascade || i > maxCascade) {
+            continue;
+        }
+        // vkfw patch: a mover's goes to the mover cascade of its levels that have one.
+        const FfxBrixelizerCascadeFlag levelFlags = context->cascades[i].flags;
+        if (isMover && (levelFlags & FFX_BRIXELIZER_CASCADE_MOVER)) {
+            moverCascadesMask |= 1 << i;
+        } else if (levelFlags & FFX_BRIXELIZER_CASCADE_STATIC) {
             cascadesMask |= 1 << i;
         }
     }
+    if (!cascadesMask && !moverCascadesMask) {
+        return;
+    }
     invalidation.cascades = cascadesMask;
+    invalidation.moverCascades = moverCascadesMask;
     invalidation.aabb = aabb;
 
     FFX_ASSERT(context->numInvalidations < FFX_ARRAY_ELEMENTS(context->invalidations));
@@ -618,6 +679,7 @@ FfxErrorCode ffxBrixelizerCreateInstances(FfxBrixelizerContext* uncastContext, c
             instance->aabb = desc->aabb;
             instance->minCascade = minCascade;
             instance->maxCascade = maxCascade;
+            instance->isMover = 0;
         } else {
             uint32_t instanceIndex = context->numStaticInstances++;
             FfxBrixelizerInstance *instance = &context->instances[instanceIndex];
@@ -626,9 +688,10 @@ FfxErrorCode ffxBrixelizerCreateInstances(FfxBrixelizerContext* uncastContext, c
             instance->aabb = desc->aabb;
             instance->minCascade = minCascade;
             instance->maxCascade = maxCascade;
+            instance->isMover = (desc->flags & FFX_BRIXELIZER_INSTANCE_FLAG_MOVER) ? 1 : 0;
             context->instanceIndices[instanceID] = instanceIndex;
 
-            addInvalidationJob(context, desc->aabb, minCascade, maxCascade);
+            addInvalidationJob(context, desc->aabb, minCascade, maxCascade, instance->isMover);
 
             if (desc->outInstanceID) {
                 *desc->outInstanceID = instanceID;
@@ -651,7 +714,7 @@ FfxErrorCode ffxBrixelizerDeleteInstances(FfxBrixelizerContext* uncastContext, c
         uint32_t index = context->instanceIndices[instanceID];
         FfxBrixelizerInstance instance = context->instances[index];
 
-        addInvalidationJob(context, instance.aabb, instance.minCascade, instance.maxCascade);
+        addInvalidationJob(context, instance.aabb, instance.minCascade, instance.maxCascade, instance.isMover);
 
         instance = context->instances[--context->numStaticInstances];
         context->instances[index] = instance;
@@ -666,6 +729,20 @@ FfxErrorCode ffxBrixelizerGetContextInfo(FfxBrixelizerContext* uncastContext, Ff
     FfxBrixelizerContext_Private *context = (FfxBrixelizerContext_Private*)uncastContext;
 
     return ffxBrixelizerRawContextGetInfo(&context->context, contextInfo);
+}
+
+FfxErrorCode ffxBrixelizerGetCascadeIndices(FfxBrixelizerContext* uncastContext, uint32_t level, uint32_t* staticIndex, uint32_t* moverIndex, uint32_t* dynamicIndex, uint32_t* mergedIndex)
+{
+    FFX_RETURN_ON_ERROR(uncastContext != NULL, FFX_ERROR_INVALID_POINTER);
+    const FfxBrixelizerContext_Private *context = (const FfxBrixelizerContext_Private*)uncastContext;
+    FFX_RETURN_ON_ERROR(level < context->numCascades, FFX_ERROR_INVALID_ARGUMENT);
+
+    const FfxBrixelizerCascadePrivate *cascade = &context->cascades[level];
+    if (staticIndex)  *staticIndex  = cascade->staticIndex;
+    if (moverIndex)   *moverIndex   = cascade->moverIndex;
+    if (dynamicIndex) *dynamicIndex = cascade->dynamicIndex;
+    if (mergedIndex)  *mergedIndex  = cascade->mergedIndex;
+    return FFX_OK;
 }
 
 FfxErrorCode ffxBrixelizerGetRawContext(FfxBrixelizerContext* context, FfxBrixelizerRawContext** outContext)

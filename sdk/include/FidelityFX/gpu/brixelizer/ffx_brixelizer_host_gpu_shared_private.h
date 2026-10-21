@@ -193,7 +193,9 @@ FFX_BRIXELIZER_BEGIN_STRUCT(FfxBrixelizerBuildInfo)
     FfxUInt32    dst_cascade;
     FfxUInt32    merge_instance_idx;
 
-    FfxUInt32x3  _padding;
+    FfxUInt32    src_cascade_C;   // vkfw patch: merge_mode 1's dynamic source (A static, B mover); 0xffffffff where the level has none
+    FfxUInt32    merge_mode;      // vkfw patch: 0 the stock two-way merge, 1 the three-way one
+    FfxUInt32    _padding;
     FfxUInt32    build_flags;
 FFX_BRIXELIZER_END_STRUCT(FfxBrixelizerBuildInfo)
 

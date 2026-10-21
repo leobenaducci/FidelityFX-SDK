@@ -502,6 +502,15 @@ FFX_API FfxErrorCode ffxBrixelizerRawContextUpdateCascade(FfxBrixelizerRawContex
 /// @ingroup ffxBrixelizer
 FFX_API FfxErrorCode ffxBrixelizerRawContextMergeCascades(FfxBrixelizerRawContext* context, uint32_t src_cascade_A_idx, uint32_t src_cascade_B_idx, uint32_t dst_cascade_idx);
 
+/// vkfw patch: merge up to three cascades (static S, mover M, dynamic D; 0xffffffff for a source the level does not have) into dst. A voxel with one
+/// brick keeps it; with D's and others, the others are merged into D's (D is reset every update); with S's and M's only, into a transient brick
+/// taken from the free list, mapped to dst, so that neither persistent source is written. dst's transient bricks from its last merge are freed (they
+/// return to the free list at the next ffxBrixelizerRawContextBegin). With no brick left to take, the voxel keeps M's.
+/// Must be called between calls to <c><i>ffxBrixelizerRawContextBegin</i></c> and <c><i>ffxBrixelizerRawContextEnd</i></c>.
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerRawContextMergeCascades3(FfxBrixelizerRawContext* context, uint32_t srcCascadeS, uint32_t srcCascadeM, uint32_t srcCascadeD, uint32_t dstCascade);
+
 /// Build an AABB tree for a cascade in a Brixelizer context.
 /// Must be called between calls to <c><i>ffxBrixelizerRawContextBegin</i></c> and <c><i>ffxBrixelizerRawContextEnd</i></c>.
 ///

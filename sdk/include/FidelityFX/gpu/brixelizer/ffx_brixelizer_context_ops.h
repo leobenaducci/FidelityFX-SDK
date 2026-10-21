@@ -241,7 +241,20 @@ void FfxBrixelizerMergeBricks(FfxUInt32 gtid, FfxUInt32 group_id)
     FfxUInt32   voxel_idx    = gtid + stamp_idx * FfxUInt32(64);
     FfxUInt32x3 voxel_offset = FfxBrixelizerUnflattenPOT(voxel_idx, FfxUInt32(3));
     if (merge_idx >= cnt) return;
-    FfxUInt32  brick_A         = LoadBricksMergeList(merge_idx * FfxUInt32(2) + FfxUInt32(0));
+    // vkfw patch: the three-way merge's entries are {S, M, D, dst}, any source invalid; dst is D, or a transient brick. One entry a dst, so no
+    // two groups write the same brick.
+    if (GetBuildInfo().merge_mode == FfxUInt32(1)) {
+        FfxFloat32 sdf = FfxFloat32(1.0);
+        for (FfxUInt32 s = FfxUInt32(0); s < FfxUInt32(3); ++s) {
+            FfxUInt32 src = LoadBricksMergeList(merge_idx * FfxUInt32(4) + s);
+            if (FfxBrixelizerIsValidID(src))
+                sdf = min(sdf, LoadSDFAtlas(FfxBrixelizerGetSDFAtlasOffset(src) + voxel_offset));
+        }
+        FfxUInt32 dst = LoadBricksMergeList(merge_idx * FfxUInt32(4) + FfxUInt32(3));
+        StoreSDFAtlas(FfxBrixelizerGetSDFAtlasOffset(dst) + voxel_offset, sdf);
+        return;
+    }
+FfxUInt32  brick_A         = LoadBricksMergeList(merge_idx * FfxUInt32(2) + FfxUInt32(0));
     FfxUInt32  brick_B         = LoadBricksMergeList(merge_idx * FfxUInt32(2) + FfxUInt32(1));
     FfxUInt32x3 atlas_offset_A = FfxBrixelizerGetSDFAtlasOffset(brick_A);
     FfxUInt32x3 atlas_offset_B = FfxBrixelizerGetSDFAtlasOffset(brick_B);
@@ -252,8 +265,104 @@ void FfxBrixelizerMergeBricks(FfxUInt32 gtid, FfxUInt32 group_id)
     }
 }
 
+#if defined(BRIXELIZER_BIND_UAV_CONTEXT_BRICKS_VOXEL_MAP) && defined(BRIXELIZER_BIND_UAV_CONTEXT_BRICKS_FREE_LIST) && defined(BRIXELIZER_BIND_UAV_CONTEXT_BRICKS_EIKONAL_COUNTERS)
+FfxUInt32 FfxBrixelizerMergeLoadSource(FfxUInt32 cascade, FfxUInt32 voxel_idx)
+{
+    // The index clamped even for an absent source: the compiler is free to make the load unconditional, and a descriptor index past the
+    // array's end faults the GPU ("instruction pointer fault").
+    const FfxUInt32 brick = LoadCascadeBrickMapArrayUniform(min(cascade, FfxUInt32(FFX_BRIXELIZER_MAX_CASCADES - 1)), voxel_idx);
+    return cascade == 0xffffffffu ? FFX_BRIXELIZER_INVALID_ID : brick;
+}
+
+FfxUInt32x2 FfxBrixelizerMergeUnpackAABB(FfxUInt32 brick)
+{
+    return FfxUInt32x2(LoadBricksAABB(FfxBrixelizerBrickGetIndex(brick)) & ((FfxUInt32(1) << FfxUInt32(9)) - FfxUInt32(1)),
+                       (LoadBricksAABB(FfxBrixelizerBrickGetIndex(brick)) >> FfxUInt32(9)) & ((FfxUInt32(1) << FfxUInt32(9)) - FfxUInt32(1)));
+}
+
+// The union of the sources' brick AABBs, packed as the brick AABBs are.
+FfxUInt32 FfxBrixelizerMergeAABBUnion(FfxUInt32 a, FfxUInt32 b, FfxUInt32 c)
+{
+    FfxUInt32x3 umin = FFX_BROADCAST_UINT32X3(7);
+    FfxUInt32x3 umax = FFX_BROADCAST_UINT32X3(0);
+    for (FfxUInt32 s = FfxUInt32(0); s < FfxUInt32(3); ++s) {
+        const FfxUInt32 source = s == FfxUInt32(0) ? a : (s == FfxUInt32(1) ? b : c);
+        if (!FfxBrixelizerIsValidID(source)) continue;
+        FfxUInt32x2 packed = FfxBrixelizerMergeUnpackAABB(source);
+        umin = min(umin, FfxBrixelizerUnflattenPOT(packed.x, FfxUInt32(3)));
+        umax = max(umax, FfxBrixelizerUnflattenPOT(packed.y, FfxUInt32(3)));
+    }
+    return FfxBrixelizerFlattenPOT(umin, 3) | (FfxBrixelizerFlattenPOT(umax, 3) << 9);
+}
+
+// vkfw patch: merge_mode 1. Static and mover bricks are never written: where both have one (and D none) the merge goes into a transient brick
+// mapped to dst, which the next merge of dst frees.
+void FfxBrixelizerMergeCascades3(FfxUInt32 voxel_idx)
+{
+    const FfxUInt32 dst = GetBuildInfo().dst_cascade;
+
+    // dst's transient brick from its last merge, if this voxel had one.
+    FfxUInt32 previous = LoadCascadeBrickMapArrayUniform(dst, voxel_idx);
+    if (FfxBrixelizerIsValidID(previous) && FfxBrixelizerGetVoxelCascade(FfxBrixelizerLoadBrickVoxelID(previous)) == dst)
+        FfxBrixelizerMarkBrickFree(previous);
+
+    FfxUInt32 brick_S = FfxBrixelizerMergeLoadSource(GetBuildInfo().src_cascade_A, voxel_idx);
+    FfxUInt32 brick_M = FfxBrixelizerMergeLoadSource(GetBuildInfo().src_cascade_B, voxel_idx);
+    FfxUInt32 brick_D = FfxBrixelizerMergeLoadSource(GetBuildInfo().src_cascade_C, voxel_idx);
+
+    if (brick_S == FFX_BRIXELIZER_UNINITIALIZED_ID || brick_M == FFX_BRIXELIZER_UNINITIALIZED_ID || brick_D == FFX_BRIXELIZER_UNINITIALIZED_ID) {
+        StoreCascadeBrickMapArrayUniform(dst, voxel_idx, FFX_BRIXELIZER_UNINITIALIZED_ID);
+        return;
+    }
+
+    const FfxBoolean has_S = FfxBrixelizerIsValidID(brick_S);
+    const FfxBoolean has_M = FfxBrixelizerIsValidID(brick_M);
+    const FfxBoolean has_D = FfxBrixelizerIsValidID(brick_D);
+    const FfxUInt32  count = (has_S ? 1u : 0u) + (has_M ? 1u : 0u) + (has_D ? 1u : 0u);
+
+    if (count == 0u) {
+        StoreCascadeBrickMapArrayUniform(dst, voxel_idx, FFX_BRIXELIZER_INVALID_ID);
+        return;
+    }
+    if (count == 1u) {
+        StoreCascadeBrickMapArrayUniform(dst, voxel_idx, has_S ? brick_S : (has_M ? brick_M : brick_D));
+        return;
+    }
+
+    FfxUInt32 target = brick_D;
+    if (!has_D) {
+        // A transient brick: the free list as the bakes of this update left it (AllocateBrick, without the per-bake budget).
+        FfxUInt32 val;
+        IncrementContextCounter(FFX_BRIXELIZER_CONTEXT_COUNTER_BRICK_COUNT, FfxUInt32(1), val);
+        if (val >= LoadContextCounter(FFX_BRIXELIZER_CONTEXT_COUNTER_FREE_BRICKS)) {
+            StoreCascadeBrickMapArrayUniform(dst, voxel_idx, brick_M);
+            return;
+        }
+        target = LoadBricksFreeList(val);
+        StoreBricksVoxelMap(FfxBrixelizerBrickGetIndex(target), voxel_idx | (dst << FFX_BRIXELIZER_CASCADE_ID_SHIFT));
+        // Written to: cleared when it is freed (FfxBrixelizerCollectClearBricks).
+        StoreBricksEikonalCounters(target, FfxUInt32(1));
+    }
+
+    FfxUInt32 offset;
+    IncrementContextCounter(FFX_BRIXELIZER_CONTEXT_COUNTER_MERGE_BRICKS, FfxUInt32(1), offset);
+    StoreBricksMergeList(offset * FfxUInt32(4) + FfxUInt32(0), brick_S);
+    StoreBricksMergeList(offset * FfxUInt32(4) + FfxUInt32(1), brick_M);
+    StoreBricksMergeList(offset * FfxUInt32(4) + FfxUInt32(2), brick_D);
+    StoreBricksMergeList(offset * FfxUInt32(4) + FfxUInt32(3), target);
+    StoreBricksAABB(FfxBrixelizerBrickGetIndex(target), FfxBrixelizerMergeAABBUnion(brick_S, brick_M, brick_D));
+    StoreCascadeBrickMapArrayUniform(dst, voxel_idx, target);
+}
+#endif
+
 void FfxBrixelizerMergeCascades(FfxUInt32 voxel_idx)
 {
+#if defined(BRIXELIZER_BIND_UAV_CONTEXT_BRICKS_VOXEL_MAP) && defined(BRIXELIZER_BIND_UAV_CONTEXT_BRICKS_FREE_LIST) && defined(BRIXELIZER_BIND_UAV_CONTEXT_BRICKS_EIKONAL_COUNTERS)
+    if (GetBuildInfo().merge_mode == FfxUInt32(1)) {
+        FfxBrixelizerMergeCascades3(voxel_idx);
+        return;
+    }
+#endif
     // Assume the same clipmap state so no need to wrap the coords
     FfxUInt32 brick_A = LoadCascadeBrickMapArrayUniform(GetBuildInfo().src_cascade_A, voxel_idx);
     FfxUInt32 brick_B = LoadCascadeBrickMapArrayUniform(GetBuildInfo().src_cascade_B, voxel_idx);
