@@ -44,6 +44,7 @@
 #include <ffx_brixelizergi_slots_seed_permutations.h>
 #include <ffx_brixelizergi_slots_stats_permutations.h>
 #include <ffx_brixelizergi_slots_resample_permutations.h>
+#include <ffx_brixelizergi_cache_feed_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_permutations.h>
@@ -72,6 +73,7 @@
 #include <ffx_brixelizergi_slots_seed_wave64_permutations.h>
 #include <ffx_brixelizergi_slots_stats_wave64_permutations.h>
 #include <ffx_brixelizergi_slots_resample_wave64_permutations.h>
+#include <ffx_brixelizergi_cache_feed_wave64_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_wave64_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_wave64_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_wave64_permutations.h>
@@ -100,6 +102,7 @@
 #include <ffx_brixelizergi_slots_seed_16bit_permutations.h>
 #include <ffx_brixelizergi_slots_stats_16bit_permutations.h>
 #include <ffx_brixelizergi_slots_resample_16bit_permutations.h>
+#include <ffx_brixelizergi_cache_feed_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_16bit_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_16bit_permutations.h>
@@ -128,6 +131,7 @@
 #include <ffx_brixelizergi_slots_seed_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_slots_stats_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_slots_resample_wave64_16bit_permutations.h>
+#include <ffx_brixelizergi_cache_feed_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_gi_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_reproject_screen_probes_wave64_16bit_permutations.h>
 #include <ffx_brixelizergi_spawn_screen_probes_wave64_16bit_permutations.h>
@@ -744,6 +748,39 @@ static FfxShaderBlob brixelizerGIGetSlotsResamplePassPermutationByIndex(uint32_t
     }
 }
 
+static FfxShaderBlob brixelizerGIGetCacheFeedPassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
+{
+    ffx_brixelizergi_cache_feed_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (isWave64)
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_cache_feed_wave64_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_cache_feed_wave64_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_cache_feed_wave64_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_cache_feed_wave64_PermutationInfo, tableIndex);
+        }
+    }
+    else
+    {
+        if (is16bit)
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_cache_feed_16bit_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_cache_feed_16bit_PermutationInfo, tableIndex);
+        }
+        else
+        {
+            const int32_t tableIndex = g_ffx_brixelizergi_cache_feed_IndirectionTable[key.index];
+            return POPULATE_SHADER_BLOB_FFX(g_ffx_brixelizergi_cache_feed_PermutationInfo, tableIndex);
+        }
+    }
+}
+
 static FfxShaderBlob brixelizerGIGetReprojectGIPassPermutationByIndex(uint32_t permutationOptions, bool isWave64, bool is16bit)
 {
     ffx_brixelizergi_reproject_gi_PermutationKey key;
@@ -1156,6 +1193,12 @@ FfxErrorCode brixelizerGIGetPermutationBlobByIndex(
         case FFX_BRIXELIZER_GI_PASS_SLOTS_RESAMPLE:
         {
             FfxShaderBlob blob = brixelizerGIGetSlotsResamplePassPermutationByIndex(permutationOptions, isWave64, is16bit);
+            memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+            return FFX_OK;
+        }
+        case FFX_BRIXELIZER_GI_PASS_CACHE_FEED:
+        {
+            FfxShaderBlob blob = brixelizerGIGetCacheFeedPassPermutationByIndex(permutationOptions, isWave64, is16bit);
             memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
             return FFX_OK;
         }

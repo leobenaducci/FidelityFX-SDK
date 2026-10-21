@@ -59,6 +59,7 @@ file(GLOB BRIXELIZER_GI_SHADERS
 	"shaders/brixelizergi/ffx_brixelizergi_slots_seed.${BRIXELIZER_GI_SHADER_EXT}"
 	"shaders/brixelizergi/ffx_brixelizergi_slots_stats.${BRIXELIZER_GI_SHADER_EXT}"
 	"shaders/brixelizergi/ffx_brixelizergi_slots_resample.${BRIXELIZER_GI_SHADER_EXT}"
+	"shaders/brixelizergi/ffx_brixelizergi_cache_feed.${BRIXELIZER_GI_SHADER_EXT}"
 "shaders/brixelizergi/ffx_brixelizergi_reproject_gi.${BRIXELIZER_GI_SHADER_EXT}"
 	"shaders/brixelizergi/ffx_brixelizergi_reproject_screen_probes.${BRIXELIZER_GI_SHADER_EXT}"
 	"shaders/brixelizergi/ffx_brixelizergi_spawn_screen_probes.${BRIXELIZER_GI_SHADER_EXT}"

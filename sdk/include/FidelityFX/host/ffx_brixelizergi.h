@@ -127,6 +127,28 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_SEED_FINER = (1 << 4),   ///< A new brick is seeded first from the next finer cascade's bricks inside it (their SH averaged by sample count, its radiance from theirs where each texel falls), and only without any from the coarser one.
 } FfxBrixelizerGICacheFlags;
 
+/// vkfw patch: what FfxBrixelizerGIDispatchDescription::cacheFeed holds, an entry each: 88 bytes, std430, no padding.
+///
+/// sh is the brick cache's own form (the irradiance SH Brixelizer GI keeps per brick, FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE's bricksSH):
+/// 9 L2 coefficients in FfxBrixelizerGISHGetCoefficients' basis and order (Y00; Y1-1 (y), Y10 (z), Y11 (x); Y2-2 (xy), Y2-1 (yz), Y20
+/// (3z^2 - 1), Y21 (xz), Y22 (x^2 - y^2)), of the radiance arriving at the brick (not convolved with a cosine), each as fp16x4 rgb plus an
+/// unused w, packed two halves to a uint32 (x | y << 16, z | w << 16). Radiance in the units the GI's other inputs use (pre-exposed the same
+/// way). samples is how many samples the estimate is worth: it weighs the entry against what the brick already holds.
+typedef struct FfxBrixelizerGICacheFeedEntry
+{
+    float    worldPosition[3];
+    float    samples;
+    uint32_t sh[18];
+} FfxBrixelizerGICacheFeedEntry;
+
+/// vkfw patch: how a cache feed entry meets the brick's own cache.
+typedef enum FfxBrixelizerGICacheFeedFlags
+{
+    FFX_BRIXELIZER_GI_CACHE_FEED_BLEND      = 0,         ///< Blended in by sample count (the brick's and the entry's).
+    FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY = (1 << 0),  ///< Only into a brick whose irradiance has fewer samples than the entry: what the screen keeps lit is left alone.
+    FFX_BRIXELIZER_GI_CACHE_FEED_DIRECT     = (1 << 1),  ///< Into the direct-light SH too (the GI's direct term, which it otherwise takes only from the screen).
+} FfxBrixelizerGICacheFeedFlags;
+
 /// vkfw patch: a body that moved since a merged cascade's last bake: a voxel of it inside the bounds was, then, at the point the transform takes it to.
 typedef struct FfxBrixelizerGIMover
 {
@@ -195,6 +217,17 @@ typedef struct FfxBrixelizerGIDispatchDescription
     /// TLAS or a celestial body would add, and the rays only reach tMax. Written at the GI's internal resolution (not upsampled).
     FfxResource skyVisibility;
     float       worldAORadius;              ///< vkfw patch: the reach of the world AO the skyVisibility target holds in .y (1 m if 0).
+
+    /// vkfw patch: the application's own estimate of the world cache, for bricks the screen never shows (probes, ray tracing): a buffer of
+    /// FfxBrixelizerGICacheFeedEntry, read by the GI's cache feed pass after its slot passes and before it shades. Each entry lands in the
+    /// brick at its world position in the finest cascade (of startCascade..endCascade) that has one there; an entry outside every brick
+    /// is dropped. cacheFeedCount holds the number of entries in its first uint32 (written on the GPU or the CPU), clamped to
+    /// maxCacheFeedEntries, which sizes the dispatch; leave cacheFeed null (or maxCacheFeedEntries 0) for none.
+    FfxResource cacheFeed;
+    FfxResource cacheFeedCount;
+    uint32_t    maxCacheFeedEntries;
+    uint32_t    cacheFeedFlags;             ///< FfxBrixelizerGICacheFeedFlags
+    float       cacheFeedMaxSamples;        ///< The sample count a brick's irradiance stops at when it is fed (16 if 0): what the screen adds later still counts.
 
     /// vkfw patch, with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: what the bake before this dispatch did to the merged cascades. Bit i is merged cascade
     /// startCascade + i, rebuilt by that bake (normally one a frame, or none).
@@ -281,6 +314,7 @@ typedef enum FfxBrixelizerGIPass
     FFX_BRIXELIZER_GI_PASS_SLOTS_SEED,
     FFX_BRIXELIZER_GI_PASS_SLOTS_STATS,
     FFX_BRIXELIZER_GI_PASS_SLOTS_RESAMPLE,      ///< vkfw patch: a moved brick's caches turned and shifted with its body's motion
+    FFX_BRIXELIZER_GI_PASS_CACHE_FEED,          ///< vkfw patch: the application's cache feed (FfxBrixelizerGIDispatchDescription::cacheFeed)
 FFX_BRIXELIZER_GI_PASS_REPROJECT_GI,
     FFX_BRIXELIZER_GI_PASS_REPROJECT_SCREEN_PROBES,
     FFX_BRIXELIZER_GI_PASS_SPAWN_SCREEN_PROBES,

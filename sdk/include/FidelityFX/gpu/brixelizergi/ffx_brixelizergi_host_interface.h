@@ -91,7 +91,9 @@ struct FfxBrixelizerGIConstants
     FfxBrixelizerGITracingConstants tracing_constants;
 
     FfxFloat32   world_ao_radius;         // vkfw patch: the skyVisibility target's .y: the AO's reach (FfxBrixelizerGIDispatchDescription::worldAORadius)
-    FfxUInt32x3  _world_ao_padding;
+    FfxUInt32    cache_feed_max;          // vkfw patch: FfxBrixelizerGIDispatchDescription::maxCacheFeedEntries (0: no feed)
+    FfxUInt32    cache_feed_flags;        // vkfw patch: FfxBrixelizerGICacheFeedFlags
+    FfxFloat32   cache_feed_max_samples;  // vkfw patch: the sample count a fed brick's irradiance can reach
 };
 
 struct FfxBrixelizerGIPassConstants 

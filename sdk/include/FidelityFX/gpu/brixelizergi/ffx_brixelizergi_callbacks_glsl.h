@@ -571,6 +571,15 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID)
     FfxUInt32 SeedListLoad(FfxUInt32 index) { return g_rw_seed_list.data[index]; }
     void SeedListStore(FfxUInt32 index, FfxUInt32 value) { g_rw_seed_list.data[index] = value; }
 #endif
+#if defined BRIXELIZER_GI_BIND_SRV_CACHE_FEED
+    // FfxBrixelizerGICacheFeedEntry, 22 uint32s.
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_SRV_CACHE_FEED, std430) readonly buffer BrixelizerGICacheFeed_t { FfxUInt32 data[]; } r_cache_feed;
+    FfxUInt32 LoadCacheFeed(FfxUInt32 index) { return r_cache_feed.data[index]; }
+#endif
+#if defined BRIXELIZER_GI_BIND_SRV_CACHE_FEED_COUNT
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_SRV_CACHE_FEED_COUNT, std430) readonly buffer BrixelizerGICacheFeedCount_t { FfxUInt32 data[]; } r_cache_feed_count;
+    FfxUInt32 LoadCacheFeedCount() { return r_cache_feed_count.data[0]; }
+#endif
 #if defined BRIXELIZER_GI_BIND_UAV_MOVER_CLAIMS
     layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_MOVER_CLAIMS, std430) coherent buffer BrixelizerGIMoverClaims_t { FfxUInt32 data[]; } g_rw_mover_claims;
     FfxUInt32 MoverClaimLoad(FfxUInt32 index) { return g_rw_mover_claims.data[index]; }
@@ -821,6 +830,21 @@ FfxFloat32 GetTracingConstantsTMax()
 FfxFloat32 GetWorldAORadius()
 {
     return GetGIConstants().world_ao_radius;
+}
+
+FfxUInt32 GetCacheFeedMax()
+{
+    return GetGIConstants().cache_feed_max;
+}
+
+FfxUInt32 GetCacheFeedFlags()
+{
+    return GetGIConstants().cache_feed_flags;
+}
+
+FfxFloat32 GetCacheFeedMaxSamples()
+{
+    return GetGIConstants().cache_feed_max_samples;
 }
 
 FfxUInt32 GetSkyVisibilityEnabled()

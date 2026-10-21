@@ -58,6 +58,7 @@ typedef struct FfxBrixelizerGIContext_Private
     FfxPipelineState                   pipelineSlotsSeed;
     FfxPipelineState                   pipelineSlotsStats;
     FfxPipelineState                   pipelineSlotsResample;
+    FfxPipelineState                   pipelineCacheFeed;
 FfxPipelineState                   pipelineSpawnScreenProbes;
     FfxPipelineState                   pipelineReprojectScreenProbes;
     FfxPipelineState                   pipelineFillScreenProbes;

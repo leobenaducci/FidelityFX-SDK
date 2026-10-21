@@ -46,6 +46,8 @@ static const ResourceBinding srvResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_SPECULAR_TARGET_READ, L"g_sdfgi_r_specular_target"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE, L"g_bctx_radiance_cache"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP, L"g_bctx_brick_slot_map"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED, L"r_cache_feed"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED_COUNT, L"r_cache_feed_count"},
 {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_ENVIRONMENT_MAP, L"g_environment_map"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_PREV_LIT_OUTPUT, L"g_prev_lit_output"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_DEPTH, L"g_depth"},
@@ -585,6 +587,14 @@ static FfxErrorCode createPipelineStates(FfxBrixelizerGIContext_Private* pContex
                                                                                 &pipelineDescription,
                                                                                 pContext->effectContextId,
                                                                                 &pContext->pipelineSlotsStats));
+    wcscpy_s(pipelineDescription.name, L"FFX_BRIXELIZER_GI_PASS_CACHE_FEED");
+    FFX_VALIDATE(pContext->contextDescription.backendInterface.fpCreatePipeline(&pContext->contextDescription.backendInterface,
+                                                                                FFX_EFFECT_BRIXELIZER_GI,
+                                                                                FFX_BRIXELIZER_GI_PASS_CACHE_FEED,
+                                                                                pipelineFlags,
+                                                                                &pipelineDescription,
+                                                                                pContext->effectContextId,
+                                                                                &pContext->pipelineCacheFeed));
     wcscpy_s(pipelineDescription.name, L"FFX_BRIXELIZER_GI_PASS_SLOTS_RESAMPLE");
     FFX_VALIDATE(pContext->contextDescription.backendInterface.fpCreatePipeline(&pContext->contextDescription.backendInterface,
                                                                                 FFX_EFFECT_BRIXELIZER_GI,
@@ -725,6 +735,7 @@ wcscpy_s(pipelineDescription.name, L"FFX_BRIXELIZER_GI_PASS_SPAWN_SCREEN_PROBES"
     patchResourceBindings(&pContext->pipelineSlotsSeed);
     patchResourceBindings(&pContext->pipelineSlotsStats);
     patchResourceBindings(&pContext->pipelineSlotsResample);
+    patchResourceBindings(&pContext->pipelineCacheFeed);
 patchResourceBindings(&pContext->pipelineSpawnScreenProbes);
     patchResourceBindings(&pContext->pipelineReprojectScreenProbes);
     patchResourceBindings(&pContext->pipelineFillScreenProbes);
@@ -1473,6 +1484,7 @@ static FfxErrorCode brixelizerGIRelease(FfxBrixelizerGIContext_Private* pContext
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSlotsSeed, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSlotsStats, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSlotsResample, pContext->effectContextId);
+    ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineCacheFeed, pContext->effectContextId);
 ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSpawnScreenProbes, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineReprojectScreenProbes, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineFillScreenProbes, pContext->effectContextId);
@@ -1881,6 +1893,9 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
     giConstants.tracing_constants.t_max                  = pDispatchDescription->tMax;
     giConstants.sky_visibility_enabled                   = bSkyVisibility ? (bSkyVisibilityHistory ? 2u : 1u) : 0u;
     giConstants.world_ao_radius                          = pDispatchDescription->worldAORadius > 0.0f ? pDispatchDescription->worldAORadius : 1.0f;
+    giConstants.cache_feed_max                           = isResourceNull(pDispatchDescription->cacheFeed) ? 0u : pDispatchDescription->maxCacheFeedEntries;
+    giConstants.cache_feed_flags                         = pDispatchDescription->cacheFeedFlags;
+    giConstants.cache_feed_max_samples                   = pDispatchDescription->cacheFeedMaxSamples > 0.0f ? pDispatchDescription->cacheFeedMaxSamples : 16.0f;
 
     FfxBrixelizerContextInfo contextInfo = {};
     FFX_VALIDATE(ffxBrixelizerRawContextGetInfo((FfxBrixelizerRawContext*)rawContext, &contextInfo));
@@ -1974,6 +1989,15 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
         }
         if (updatedLevelMask != 0)
             brixelizerGIScheduleSlots(pContext, pDispatchDescription, &contextInfo, updatedLevelMask, remaps, numRemaps);
+    }
+    // vkfw patch: the application's cache feed, after the slots are handed out and before anything shades.
+    if (!isResourceNull(pDispatchDescription->cacheFeed) && !isResourceNull(pDispatchDescription->cacheFeedCount) && pDispatchDescription->maxCacheFeedEntries > 0)
+    {
+        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface, &pDispatchDescription->cacheFeed,
+                                                                         pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED]);
+        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface, &pDispatchDescription->cacheFeedCount,
+                                                                         pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED_COUNT]);
+        scheduleDispatch(pContext, &pContext->pipelineCacheFeed, (pDispatchDescription->maxCacheFeedEntries + 63) / 64, 1, 1);
     }
 scheduleDispatch(pContext, &pContext->pipelineEmitPrimaryRayRadiance, (bufferWidth / 4 + 7) / 8, (bufferHeight / 4 + 7) / 8, 1);
 
