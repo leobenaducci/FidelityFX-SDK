@@ -121,6 +121,8 @@ void StoreStaticGITarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x4 LoadDebugTraget(FfxUInt32x2 coord);
 void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
+FfxFloat32x2 LoadSkyVisibilityHistory(FfxUInt32x2 coord);
+void StoreSkyVisibilityHistory(FfxUInt32x2 coord, FfxFloat32x2 value);
 FfxFloat32x3 SampleEnvironmentMap(FfxFloat32x3 world_space_reflected_direction);
 FfxFloat32x3 SampleRadianceCacheSRV(FfxFloat32x3 uvw);
 FfxFloat32x3 LoadRadianceCache(FfxUInt32x3 coord);
@@ -301,6 +303,14 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
 
 #if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET
     layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET, rgba16f)         uniform image2D g_sdfgi_rw_sky_visibility_target;
+#endif
+
+#if defined BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY)                 uniform texture2D g_sdfgi_r_sky_visibility_history;
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_HISTORY
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_HISTORY, rg16f)          uniform image2D g_sdfgi_rw_sky_visibility_history;
 #endif
 
 #if defined BRIXELIZER_GI_BIND_UAV_RADIANCE_CACHE
@@ -1136,6 +1146,20 @@ void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 {
     imageStore(g_sdfgi_rw_sky_visibility_target, FfxInt32x2(coord), value);
+}
+#endif
+
+#if defined BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY
+FfxFloat32x2 LoadSkyVisibilityHistory(FfxUInt32x2 coord)
+{
+    return texelFetch(g_sdfgi_r_sky_visibility_history, FfxInt32x2(coord), 0).xy;
+}
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_HISTORY
+void StoreSkyVisibilityHistory(FfxUInt32x2 coord, FfxFloat32x2 value)
+{
+    imageStore(g_sdfgi_rw_sky_visibility_history, FfxInt32x2(coord), FfxFloat32x4(value, 0.0, 0.0));
 }
 #endif
 

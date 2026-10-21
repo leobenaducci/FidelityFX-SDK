@@ -73,6 +73,8 @@ typedef struct FfxBrixelizerGIContext_Private
     uint32_t                           historySpecularTargetId;
     uint32_t                           frameIndex;
     FfxDimensions2D                    internalSize;
-	FfxGpuJobDescription               gpuJobDescription;
+    uint32_t                           skyVisibilityHistoryIndex;   // vkfw patch: which of the two sky visibility histories was written last
+    bool                               bSkyVisibilityHistoryValid;  // vkfw patch: and whether the last dispatch wrote it
+FfxGpuJobDescription               gpuJobDescription;
     FfxConstantBuffer                  constantBuffers[3];
 } FfxBrixelizerGIContext_Private;

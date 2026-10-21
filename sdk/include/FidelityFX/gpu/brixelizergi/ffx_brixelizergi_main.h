@@ -894,11 +894,8 @@ RaySetup FfxBrixelizerGIGetRaySetup(FfxUInt32x2 tid)
 // distance, so it stays one; it is also the one place where the GI knows a ray saw the sky.
 #define FFX_BRIXELIZER_GI_PROBE_MISS_DISTANCE FfxFloat32(128.0)
 
-// What the interpolation's lookup of a probe's sky visibility gives when all 64 of its rays escaped: the 8x8 hemi-oct directions' SH
-// projection weighted by their cosine (ProjectScreenProbes), reconstructed through the clamped cosine kernel at the probe's own normal.
-// It is 2 * pi * 3.4415, not the 2 * pi the irradiance is divided by -- the irradiance's scale carries the same factor, which the GI's
-// exposure absorbs -- and it falls to about 3.03 / 3.44 at 30 degrees between the pixel's normal and the probe's, 2.05 / 3.44 at 60.
-#define FFX_BRIXELIZER_GI_PROBE_FULL_VISIBILITY FfxFloat32(21.6235)
+// vkfw patch: how many frames the sky visibility's temporal accumulation averages at most (InterpolateScreenProbes).
+#define FFX_BRIXELIZER_GI_SKY_VISIBILITY_MAX_FRAMES FfxFloat32(32.0)
 
 // 8x8 group or 2x32 waves
 void FfxBrixelizerGIFillScreenProbes(FfxUInt32x2 tid)
@@ -1098,9 +1095,13 @@ void FfxBrixelizerGIProjectScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
 
     FfxFloat32 c = dot(ray_direction, pinfo.normal);
 
-    // vkfw patch: with a sky visibility target, the .w of each coefficient carries the SH of the texel's visibility instead of the 1.0 nothing
-    // reads. A texel whose history is all misses holds the miss distance and is open sky, a hit holds its distance (below t_max); a mix of
-    // the two, from reprojection or the 1/4 blend, lands between and reads as partly open. So it leans towards occluded where a ray flickers.
+    // vkfw patch: with a sky visibility target, the .w of the coefficients (a 1.0 nothing reads otherwise) carries the probe's sky visibility:
+    // the cosine-weighted mean over its 64 texels of v, 1 where the texel's ray escaped and 0 where it hit. A texel whose history is all
+    // misses holds the miss distance, a hit holds its distance (below t_max); a mix of the two, from reprojection or the 1/4 blend, lands
+    // between and reads as partly open, leaning towards occluded. The LDS sum below adds c * v in coefficient 0's .w and c in coefficient
+    // 1's. The mean is a plain scalar rather than an SH of v: the interpolation reads it at the probe's own normal (its weights all but
+    // require the pixel's normal to match), and an L2 SH of a hemisphere-only function reconstructed through the clamped cosine both
+    // weights it by cos^2 and smears it, which read 0.16 brighter than the mean on the diorama and halved its correlation with the SDF probes.
     const FfxBoolean sky_visibility_enabled = GetSkyVisibilityEnabled() != 0u;
     FfxFloat32       sky_visibility         = FfxFloat32(0.0);
     if (sky_visibility_enabled)
@@ -1108,9 +1109,15 @@ void FfxBrixelizerGIProjectScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
         const FfxFloat32 t_half = FfxFloat32(0.5) * GetTracingConstantsTMax();
         sky_visibility          = ffxSaturate((radiance.w - t_half) / ffxMax(FFX_BRIXELIZER_GI_PROBE_MISS_DISTANCE - t_half, FfxFloat32(1.0)));
     }
+    const FfxFloat32 c_pos = ffxMax(c, FfxFloat32(0.0));
 
     for (FfxUInt32 j = 0; j < 9; j++)
-        lds_probe_sh_buffer[FfxBrixelizerGIGetSHLDSIndex(gid, j)] = ffxPackF32x2(FfxFloat32x4(direction_sh[j] * radiance.xyz * c, sky_visibility_enabled ? direction_sh[j] * sky_visibility * c : FfxFloat32(1.0)));
+    {
+        FfxFloat32 w_lane = FfxFloat32(1.0);
+        if (sky_visibility_enabled)
+            w_lane = j == 0u ? c_pos * sky_visibility : (j == 1u ? c_pos : FfxFloat32(0.0));
+        lds_probe_sh_buffer[FfxBrixelizerGIGetSHLDSIndex(gid, j)] = ffxPackF32x2(FfxFloat32x4(direction_sh[j] * radiance.xyz * c, w_lane));
+    }
 
     FFX_GROUP_MEMORY_BARRIER;
 
@@ -1142,15 +1149,19 @@ void FfxBrixelizerGIProjectScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
         FfxFloat32x4 irradiance_sh      = ffxUnpackF32x2(lds_probe_sh_buffer[FfxBrixelizerGIGetSHLDSIndex(FfxUInt32x2(0, 0), thread_sh_index)]);
         
         if (!sky_visibility_enabled)
-            if (!sky_visibility_enabled)
         {
             irradiance_sh.w = FfxFloat32(1.0);
         }
-        else if (LoadTempSpawnMask(probe_coord) == 1u && !isnan(irradiance_history.w) && !isinf(irradiance_history.w))
+        else
         {
-            // A visibility of 64 rays is noisy; the reprojected history (ReprojectScreenProbes put last frame's value, taken from where the
-            // probe's surface was, in the .w of the temp SH) averages it over the frames the probe has lived.
-            irradiance_sh.w = ffxLerp(irradiance_history.w, irradiance_sh.w, FfxFloat32(1.0 / 8.0));
+            const FfxFloat32 sum_cv = ffxUnpackF32x2(lds_probe_sh_buffer[FfxBrixelizerGIGetSHLDSIndex(FfxUInt32x2(0, 0), 0u)]).w;
+            const FfxFloat32 sum_c  = ffxUnpackF32x2(lds_probe_sh_buffer[FfxBrixelizerGIGetSHLDSIndex(FfxUInt32x2(0, 0), 1u)]).w;
+            irradiance_sh.w         = ffxSaturate(sum_cv / ffxMax(sum_c, FfxFloat32(1.0e-3)));
+
+            // The reprojected history (ReprojectScreenProbes put the previous frame's value of the probes around where this one's surface
+            // was in the .w of the temp SH) averages it over the frames the probe has lived.
+            if (LoadTempSpawnMask(probe_coord) == 1u && !isnan(irradiance_history.w) && !isinf(irradiance_history.w))
+                irradiance_sh.w = ffxLerp(ffxSaturate(irradiance_history.w), irradiance_sh.w, FfxFloat32(1.0 / 8.0));
         }
 
         StoreTempProbeSHBuffer(9 * sh_offset + thread_sh_index, ffxPackF32x2(irradiance_sh));
@@ -1499,7 +1510,10 @@ void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
         StoreStaticGITarget(tid, FFX_BROADCAST_FLOAT32X4(FfxFloat32(0.0)));
         StoreSpecularTarget(tid, FFX_BROADCAST_FLOAT32X4(FfxFloat32(0.0)));
         if (sky_visibility_enabled)
+        {
             StoreSkyVisibilityTarget(tid, FfxFloat32x4(1.0, 1.0, 1.0, 1.0));
+            StoreSkyVisibilityHistory(tid, FfxFloat32x2(1.0, 0.0));
+        }
         return;
     }
 
@@ -1548,6 +1562,9 @@ void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
     FfxFloat32x3 specular_irradiance = FFX_BROADCAST_FLOAT32X3(0.0);
     FfxFloat32   num_diffuse_samples = 0;
     FfxFloat32   sky_irradiance      = FfxFloat32(0.0);
+    FfxFloat32   sky_weight_sum      = FfxFloat32(0.0);
+    FfxFloat32   sky_any_sum         = FfxFloat32(0.0);
+    FfxFloat32   sky_any_weight      = FfxFloat32(0.0);
 
 #if FFX_BRIXELIZER_GI_OPTION_DISABLE_DENOISER == 0
     FfxFloat32x4 reprojected     = LoadStaticGITargetSRV(tid);
@@ -1578,11 +1595,18 @@ void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
 
             if (sky_visibility_enabled)
             {
-                // The same lookup as the irradiance, of the visibility the probe's rays saw (see ProjectScreenProbes).
-                FfxFloat32 cur_sky = FfxFloat32(0.0);
-                for (FfxUInt32 i = 0; i < 9; i++)
-                    cur_sky += FfxFloat32(cosine_sh[i]) * probe_sh[i].w;
-                sky_irradiance += w[j] * cur_sky * weight;
+                // The probe's sky visibility (see ProjectScreenProbes), with weights of its own: the irradiance's fall to nothing within
+                // half a probe spacing -- a quarter of the pixels here had no probe at all, where the GI reads the world cache instead --
+                // so these reach four times as far, and keep only the normal and same-surface tests.
+                const FfxFloat32 sky_n     = ffxSaturate(dot(pixel_normal, pinfo.normal));
+                const FfxFloat32 sky_plane = ffxSaturate(FfxFloat32(1.0) - abs(dot(probe_spawn_position - world_pos, pixel_normal)) / (FfxFloat32(2.0) * eps_size));
+                const FfxFloat32 sky_dist  = ffxSaturate(FfxFloat32(1.0) - length(probe_spawn_position - world_pos) / (FfxFloat32(4.0) * eps_size));
+                const FfxFloat32 sky_n2    = sky_n * sky_n;
+                const FfxFloat32 sky_w     = sky_n2 * sky_n2 * sky_plane * sky_dist * sky_dist;
+                sky_irradiance += sky_w * ffxSaturate(probe_sh[0].w);
+                sky_weight_sum += sky_w;
+                sky_any_sum    += sky_n2 * sky_n2 * ffxSaturate(probe_sh[0].w);
+                sky_any_weight += sky_n2 * sky_n2;
             }
 
             irradiance += w[j] * cur_irradiance * weight;
@@ -1595,8 +1619,41 @@ void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
 
     if (sky_visibility_enabled)
     {
-        // Open sky where no probe is near.
-        const FfxFloat32 sky = weight_sum < EPS ? FfxFloat32(1.0) : ffxSaturate(sky_irradiance / (weight_sum * FFX_BRIXELIZER_GI_PROBE_FULL_VISIBILITY));
+        // Where no probe passes the same-surface test, the four by their normals alone; open sky only where none faces the pixel either.
+        FfxFloat32 sky = FfxFloat32(1.0);
+        if (sky_weight_sum > FfxFloat32(1.0e-4))
+            sky = sky_irradiance / sky_weight_sum;
+        else if (sky_any_weight > FfxFloat32(1.0e-4))
+            sky = sky_any_sum / sky_any_weight;
+        sky = ffxSaturate(sky);
+
+        // The probes' values still change from frame to frame: their spawn pixels are drawn anew each frame and each retraces 1 frame in
+        // 16, so which probe a pixel reads, and what it holds, moves (a mean |change| of about 0.03 a frame on the diorama). The GI's own
+        // irradiance passes the same through its temporal accumulation (up to 64 frames), its blur and the world cache; this gets a
+        // temporal accumulation of its own, through the motion vectors, trusting the history where the GI's reprojection did (the
+        // reprojected GI target's frame count, 0 where it found the pixel disoccluded). GetSkyVisibilityEnabled() is 2 once the history
+        // holds a previous frame's values.
+        FfxFloat32 sky_frames = FfxFloat32(0.0);
+        if (GetSkyVisibilityEnabled() == 2u)
+        {
+            const FfxFloat32x2 sky_history_uv = pixel_uv + FfxBrixelizerGIFindClosestMotionVector(tid);
+            FfxBoolean         sky_history_ok = all(FFX_GREATER_THAN_EQUAL(sky_history_uv, FFX_BROADCAST_FLOAT32X2(0.0))) && all(FFX_LESS_THAN(sky_history_uv, FFX_BROADCAST_FLOAT32X2(1.0)));
+#if FFX_BRIXELIZER_GI_OPTION_DISABLE_DENOISER == 0
+            sky_history_ok = sky_history_ok && reprojected.w > FfxFloat32(0.0);
+#endif
+            if (sky_history_ok)
+            {
+                const FfxFloat32x2 sky_history = LoadSkyVisibilityHistory(FfxUInt32x2(sky_history_uv * GetBufferDimensionsF32()));
+                if (!any(isnan(sky_history)) && !any(isinf(sky_history)))
+                {
+                    sky_frames = ffxMin(sky_history.y, FFX_BRIXELIZER_GI_SKY_VISIBILITY_MAX_FRAMES - FfxFloat32(1.0));
+                    // A history further than this from the current value is taken for a change (or a ghost), not noise.
+                    const FfxFloat32 sky_prev = clamp(ffxSaturate(sky_history.x), sky - FfxFloat32(0.3), sky + FfxFloat32(0.3));
+                    sky = ffxLerp(sky_prev, sky, FfxFloat32(1.0) / (FfxFloat32(1.0) + sky_frames));
+                }
+            }
+        }
+        StoreSkyVisibilityHistory(tid, FfxFloat32x2(sky, sky_frames + FfxFloat32(1.0)));
         StoreSkyVisibilityTarget(tid, FfxFloat32x4(sky, sky, sky, 1.0));
     }
 FfxFloat32 size_weight           = ffxSaturate(eps_size / (GetContextInfo().cascades[0].voxel_size * FfxFloat32(64.0)));

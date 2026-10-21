@@ -108,7 +108,14 @@
 // vkfw patch: the application's sky visibility target; the interpolation's debug target stands in for it while there is none.
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY                114
 
-#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                115
+// vkfw patch: the sky visibility's own temporal history (value, frame count), two internal targets the dispatch alternates between, and
+// the two names the shaders bind them by: last frame's to read, this frame's to write.
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_0              115
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_1              116
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_READ           117
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_WRITE          118
+
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                119
 
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_GI_CONSTANTS                    0
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_PASS_CONSTANTS                  1

@@ -121,6 +121,8 @@ void StoreStaticGITarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x4 LoadDebugTraget(FfxUInt32x2 coord);
 void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
+FfxFloat32x2 LoadSkyVisibilityHistory(FfxUInt32x2 coord);
+void StoreSkyVisibilityHistory(FfxUInt32x2 coord, FfxFloat32x2 value);
 FfxFloat32x3 SampleEnvironmentMap(FfxFloat32x3 world_space_reflected_direction);
 FfxFloat32x3 SampleRadianceCacheSRV(FfxFloat32x3 uvw);
 FfxFloat32x3 LoadRadianceCache(FfxUInt32x3 coord);
@@ -302,6 +304,14 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
 
 #if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET
     RWTexture2D<FfxFloat32x4>           g_sdfgi_rw_sky_visibility_target         : FFX_BRIXELIZER_DECLARE_UAV(BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET);
+#endif
+
+#if defined BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY
+    Texture2D<FfxFloat32x2>             g_sdfgi_r_sky_visibility_history         : FFX_BRIXELIZER_DECLARE_SRV(BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY);
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_HISTORY
+    RWTexture2D<FfxFloat32x2>           g_sdfgi_rw_sky_visibility_history        : FFX_BRIXELIZER_DECLARE_UAV(BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_HISTORY);
 #endif
 
 #if defined BRIXELIZER_GI_BIND_UAV_DEBUG_TARGET
@@ -1113,6 +1123,20 @@ void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 {
     g_sdfgi_rw_sky_visibility_target[coord] = value;
+}
+#endif
+
+#if defined BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY
+FfxFloat32x2 LoadSkyVisibilityHistory(FfxUInt32x2 coord)
+{
+    return g_sdfgi_r_sky_visibility_history[coord];
+}
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_HISTORY
+void StoreSkyVisibilityHistory(FfxUInt32x2 coord, FfxFloat32x2 value)
+{
+    g_sdfgi_rw_sky_visibility_history[coord] = value;
 }
 #endif
 

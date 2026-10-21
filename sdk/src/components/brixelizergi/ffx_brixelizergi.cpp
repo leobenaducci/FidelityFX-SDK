@@ -70,6 +70,7 @@ static const ResourceBinding srvResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SOURCE_LIT_OUTPUT, L"g_src_prev_lit_output"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_DIFFUSE_GI, L"g_downsampled_diffuse_gi"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SPECULAR_GI, L"g_downsampled_specular_gi"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_READ, L"g_sdfgi_r_sky_visibility_history"},
 };
 
 static const ResourceBinding uavResourceBindingTable[] = {
@@ -79,7 +80,8 @@ static const ResourceBinding uavResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_GI_TARGET_WRITE, L"g_sdfgi_rw_static_gitarget"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET, L"g_sdfgi_rw_debug_target"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY, L"g_sdfgi_rw_sky_visibility_target"},
-{FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE, L"g_rw_bctx_radiance_cache"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_WRITE, L"g_sdfgi_rw_sky_visibility_history"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE, L"g_rw_bctx_radiance_cache"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_TEMP_SPAWN_MASK, L"g_sdfgi_rw_temp_spawn_mask"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_TEMP_RAND_SEED, L"g_sdfgi_rw_temp_rand_seed"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_TEMP_SPECULAR_PRETRACE_TARGET, L"g_sdfgi_rw_temp_specular_pretrace_target"},
@@ -960,6 +962,25 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
              pContext->internalSize.height,
              1,
              FFX_RESOURCE_FLAGS_NONE},
+            // vkfw patch: the sky visibility's history (InterpolateScreenProbes), 3.5 bytes a pixel of the internal size in all.
+            {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_0,
+             L"BrixelizerGI_SkyVisibilityHistory0",
+             FFX_RESOURCE_TYPE_TEXTURE2D,
+             FFX_RESOURCE_USAGE_UAV,
+             FFX_SURFACE_FORMAT_R16G16_FLOAT,
+             pContext->internalSize.width,
+             pContext->internalSize.height,
+             1,
+             FFX_RESOURCE_FLAGS_NONE},
+            {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_1,
+             L"BrixelizerGI_SkyVisibilityHistory1",
+             FFX_RESOURCE_TYPE_TEXTURE2D,
+             FFX_RESOURCE_USAGE_UAV,
+             FFX_SURFACE_FORMAT_R16G16_FLOAT,
+             pContext->internalSize.width,
+             pContext->internalSize.height,
+             1,
+             FFX_RESOURCE_FLAGS_NONE},
             {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET,
              L"BrixelizerGI_DebugTarget",
              FFX_RESOURCE_TYPE_TEXTURE2D,
@@ -1277,6 +1298,9 @@ static FfxErrorCode brixelizerGIRelease(FfxBrixelizerGIContext_Private* pContext
             continue;
         ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[currentResourceIndex], pContext->effectContextId);
     }
+    // vkfw patch: internal, but numbered after the application's resources.
+    ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_0], pContext->effectContextId);
+    ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_1], pContext->effectContextId);
 
     // Destroy the context.
     pContext->contextDescription.backendInterface.fpDestroyBackendContext(&pContext->contextDescription.backendInterface, pContext->effectContextId);
@@ -1418,6 +1442,15 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
     {
         pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY] = pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET];
     }
+    // Its history alternates between the two targets each frame; it holds a previous frame's values only if that frame wrote it.
+    const uint32_t skyHistoryWrite = pContext->skyVisibilityHistoryIndex ^ 1u;
+    pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_READ] =
+        pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_0 + pContext->skyVisibilityHistoryIndex];
+    pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_WRITE] =
+        pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_0 + skyHistoryWrite];
+    const bool bSkyVisibilityHistory      = bSkyVisibility && pContext->bSkyVisibilityHistoryValid;
+    pContext->skyVisibilityHistoryIndex   = skyHistoryWrite;
+    pContext->bSkyVisibilityHistoryValid  = bSkyVisibility;
 pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDispatchDescription->bricksAABBs,
                                                                      pContext->effectContextId,
@@ -1547,7 +1580,7 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
     giConstants.tracing_constants.preview_sdf_solve_eps  = 0.0f;
     giConstants.tracing_constants.t_min                  = pDispatchDescription->tMin;
     giConstants.tracing_constants.t_max                  = pDispatchDescription->tMax;
-    giConstants.sky_visibility_enabled                   = bSkyVisibility ? 1u : 0u;
+    giConstants.sky_visibility_enabled                   = bSkyVisibility ? (bSkyVisibilityHistory ? 2u : 1u) : 0u;
 
     FfxBrixelizerContextInfo contextInfo = {};
     FFX_VALIDATE(ffxBrixelizerRawContextGetInfo((FfxBrixelizerRawContext*)rawContext, &contextInfo));
