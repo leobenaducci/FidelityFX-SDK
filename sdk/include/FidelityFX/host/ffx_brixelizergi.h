@@ -194,6 +194,7 @@ typedef struct FfxBrixelizerGIDispatchDescription
     /// work. Taken from the rays the GI traces anyway: a ray that left the scene without a hit counts as sky, so it knows nothing of what the
     /// TLAS or a celestial body would add, and the rays only reach tMax. Written at the GI's internal resolution (not upsampled).
     FfxResource skyVisibility;
+    float       worldAORadius;              ///< vkfw patch: the reach of the world AO the skyVisibility target holds in .y (1 m if 0).
 
     /// vkfw patch, with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: what the bake before this dispatch did to the merged cascades. Bit i is merged cascade
     /// startCascade + i, rebuilt by that bake (normally one a frame, or none).

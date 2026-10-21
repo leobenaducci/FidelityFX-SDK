@@ -1061,7 +1061,7 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
              L"BrixelizerGI_SkyVisibilityHistory0",
              FFX_RESOURCE_TYPE_TEXTURE2D,
              FFX_RESOURCE_USAGE_UAV,
-             FFX_SURFACE_FORMAT_R16G16_FLOAT,
+             FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT,
              pContext->internalSize.width,
              pContext->internalSize.height,
              1,
@@ -1070,7 +1070,7 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
              L"BrixelizerGI_SkyVisibilityHistory1",
              FFX_RESOURCE_TYPE_TEXTURE2D,
              FFX_RESOURCE_USAGE_UAV,
-             FFX_SURFACE_FORMAT_R16G16_FLOAT,
+             FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT,
              pContext->internalSize.width,
              pContext->internalSize.height,
              1,
@@ -1880,6 +1880,7 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
     giConstants.tracing_constants.t_min                  = pDispatchDescription->tMin;
     giConstants.tracing_constants.t_max                  = pDispatchDescription->tMax;
     giConstants.sky_visibility_enabled                   = bSkyVisibility ? (bSkyVisibilityHistory ? 2u : 1u) : 0u;
+    giConstants.world_ao_radius                          = pDispatchDescription->worldAORadius > 0.0f ? pDispatchDescription->worldAORadius : 1.0f;
 
     FfxBrixelizerContextInfo contextInfo = {};
     FFX_VALIDATE(ffxBrixelizerRawContextGetInfo((FfxBrixelizerRawContext*)rawContext, &contextInfo));

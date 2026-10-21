@@ -89,6 +89,9 @@ struct FfxBrixelizerGIConstants
     FfxUInt32    frame_index;
 
     FfxBrixelizerGITracingConstants tracing_constants;
+
+    FfxFloat32   world_ao_radius;         // vkfw patch: the skyVisibility target's .y: the AO's reach (FfxBrixelizerGIDispatchDescription::worldAORadius)
+    FfxUInt32x3  _world_ao_padding;
 };
 
 struct FfxBrixelizerGIPassConstants 
