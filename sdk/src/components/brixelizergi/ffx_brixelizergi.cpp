@@ -1548,6 +1548,10 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         const bool bCoarser = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_COARSER) && level + 1 < FFX_BRIXELIZER_GI_SLOT_LEVELS &&
                               cascadeIndex + 1 <= pDispatchDescription->endCascade && pContext->slotLevels[level + 1].valid;
         constants.coarser_cascade_index = bCoarser ? cascadeIndex + 1 : 0xffffffffu;
+        // The finer one was rebuilt more recently (finer levels rebuild more often) and sees the voxel in more detail.
+        const bool bFiner = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_FINER) && level > 0 && cascadeIndex > pDispatchDescription->startCascade &&
+                            pContext->slotLevels[level - 1].valid;
+        constants.finer_cascade_index   = bFiner ? cascadeIndex - 1 : 0xffffffffu;
         constants.seed_samples          = pDispatchDescription->seedSamples;
         constants.seed_radiance         = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE) ? 1u : 0u;
         constants.seed_min_samples      = pDispatchDescription->seedMinSamples;

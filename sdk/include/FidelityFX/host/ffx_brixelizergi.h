@@ -124,6 +124,7 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_SEED_COARSER = (1 << 1),  ///< A new brick is seeded from the next coarser cascade's brick there.
     FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE = (1 << 2), ///< The seed fills the radiance cache too.
     FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC = (1 << 3), ///< A static brick in a mover's bounds keeps its voxel's slot: level L's static cascade is raw cascade L (ffxBrixelizerGetCascadeIndices' layout, with a static cascade at every level).
+    FFX_BRIXELIZER_GI_CACHE_SEED_FINER = (1 << 4),   ///< A new brick is seeded first from the next finer cascade's bricks inside it (their SH averaged by sample count, its radiance from theirs where each texel falls), and only without any from the coarser one.
 } FfxBrixelizerGICacheFlags;
 
 /// vkfw patch: a body that moved since a merged cascade's last bake: a voxel of it inside the bounds was, then, at the point the transform takes it to.

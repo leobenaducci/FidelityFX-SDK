@@ -46,6 +46,7 @@
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS 32u             // the seed list's length
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS 33u      // the mover claim list's length (FFX_BRIXELIZER_GI_SLOTS_PASS_RESAMPLE)
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_RESAMPLED 11u         // slots a mover claim took that the resample turned or shifted
+#define FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDED_FINE 12u       // slots filled from the finer cascade's bricks inside them
 
 // In the new-slot map between the claims and the allocation: the voxel's slot, which another brick claimed first (a body that moved into it). The
 // brick takes a new slot, copied from that one. Slots are below 2^18.
@@ -353,6 +354,84 @@ FfxBoolean FfxBrixelizerGISlotsIsSeedCompatible(FfxUInt32 seed_slot, FfxUInt32 b
     return dot(seen_from, FfxBrixelizerGISlotsBrickCentreNormal(brick)) > FfxFloat32(0.0);
 }
 
+// Fill a new brick's slot from the finer cascade's bricks inside its voxel, found at the 8 octant centres (by world position: the cascades'
+// voxel sizes do not double exactly): their SH averaged by sample count (each over the minimum the coarser seed asks for), the count capped
+// at seed_samples, the probe direction averaged the same way; each radiance texel from the fine brick where it falls, over its lit texels.
+// A coarse voxel can span both faces of a wall: only fine bricks whose probes saw them from the side the new brick faces (its SDF gradient,
+// as the coarser seed's test) count. False if no fine brick there has a cache to give.
+FfxBoolean FfxBrixelizerGISlotsSeedFromFiner(FfxUInt32 slot, FfxFloat32x3 voxel_min, FfxFloat32 voxel_size, FfxFloat32x3 normal)
+{
+    const FfxUInt32                finer_idx = GetSlotConstants().finer_cascade_index;
+    const FfxBrixelizerCascadeInfo finer     = GetCascadeInfo(finer_idx);
+
+    FfxFloat32x4 sh[9];
+    FfxFloat32x4 direct_sh[9];
+    for (FfxUInt32 i = 0u; i < 9u; ++i)
+    {
+        sh[i]        = FFX_BROADCAST_FLOAT32X4(0.0);
+        direct_sh[i] = FFX_BROADCAST_FLOAT32X4(0.0);
+    }
+    FfxFloat32x3 seen_from   = FFX_BROADCAST_FLOAT32X3(0.0);
+    FfxFloat32   total       = FfxFloat32(0.0);
+    FfxUInt32    best_slot   = FFX_BRIXELIZER_GI_SLOT_INVALID;
+    FfxFloat32   best_weight = FfxFloat32(0.0);
+    for (FfxUInt32 o = 0u; o < 8u; ++o)
+    {
+        const FfxFloat32x3 octant = (FfxFloat32x3(FfxUInt32x3(o & 1u, (o >> 1u) & 1u, o >> 2u)) + FFX_BROADCAST_FLOAT32X3(0.5)) * FfxFloat32(0.5);
+        const FfxUInt32    fine   = FfxBrixelizerGISlotsSlotOf(FfxBrixelizerGISlotsBrickAt(finer_idx, finer, voxel_min + octant * voxel_size));
+        if (fine == FFX_BRIXELIZER_GI_SLOT_INVALID)
+            continue;
+        const FfxFloat32 w = ffxUnpackF32x2(LoadBricksSH(fine * 9u)).w;
+        if (!(w >= GetSlotConstants().seed_min_samples) || !(dot(ffxUnpackF32x2(LoadBricksSHState(fine).xy).xyz, normal) > FfxFloat32(0.0)))
+            continue;
+        for (FfxUInt32 i = 0u; i < 9u; ++i)
+        {
+            sh[i]        += ffxUnpackF32x2(LoadBricksSH(fine * 9u + i)) * w;
+            direct_sh[i] += ffxUnpackF32x2(LoadBricksDirectSH(fine * 9u + i)) * w;
+        }
+        seen_from += ffxUnpackF32x2(LoadBricksSHState(fine).xy).xyz * w;
+        total += w;
+        if (w > best_weight)
+        {
+            best_weight = w;
+            best_slot   = fine;
+        }
+    }
+    if (total <= FfxFloat32(0.0))
+        return false;
+
+    const FfxFloat32 samples = ffxMin(total / FfxFloat32(8.0), GetSlotConstants().seed_samples);
+    for (FfxUInt32 i = 0u; i < 9u; ++i)
+    {
+        FfxFloat32x4 value        = sh[i] / total;
+        FfxFloat32x4 direct_value = direct_sh[i] / total;
+        value.w        = samples;
+        direct_value.w = samples;
+        StoreBricksSH(slot * 9u + i, ffxFloat16x4ToUint32x2(FFX_MIN16_F4(value)));
+        StoreBricksDirectSH(slot * 9u + i, ffxFloat16x4ToUint32x2(FFX_MIN16_F4(direct_value)));
+    }
+    FfxUInt32x4  state = LoadBricksSHState(best_slot);
+    FfxFloat32x4 dir   = ffxUnpackF32x2(state.xy);
+    dir.xyz  = dot(seen_from, seen_from) > FfxFloat32(0.0) ? normalize(seen_from) : dir.xyz;
+    state.xy = ffxFloat16x4ToUint32x2(FFX_MIN16_F4(dir));
+    StoreBricksSHState(slot, state);
+
+    for (FfxUInt32 texel = 0u; texel < 64u; ++texel)
+    {
+        FfxFloat32x3 radiance = FFX_BROADCAST_FLOAT32X3(0.0);
+        if (GetSlotConstants().seed_radiance != 0u)
+        {
+            const FfxFloat32x3 p   = voxel_min + FfxFloat32x3(FfxBrixelizerUnflattenPOT(texel, 2)) / FfxFloat32(3.0) * voxel_size;
+            const FfxFloat32x3 rel = (p - finer.grid_min) / finer.voxel_size;
+            const FfxUInt32    fine = FfxBrixelizerGISlotsSlotOf(FfxBrixelizerGISlotsBrickAt(finer_idx, finer, p));
+            if (fine != FFX_BRIXELIZER_GI_SLOT_INVALID)
+                radiance = FfxBrixelizerGISlotsSampleRadiance(fine, rel - floor(rel));
+        }
+        StoreRadianceCache(FfxBrixelizerGetSDFAtlasOffset(slot) / 2 + FfxBrixelizerUnflattenPOT(texel, 2), radiance);
+    }
+    return true;
+}
+
 void FfxBrixelizerGISlotsSeed(FfxUInt32 tid)
 {
     if (tid >= SlotCounterLoad(FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS))
@@ -387,7 +466,15 @@ const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
     const FfxUInt32    brick    = FfxBrixelizerGISlotsLoadBrickMap(cascade_idx, cell);
     const FfxFloat32x3 position = cascade.grid_min + (FfxFloat32x3(voxel) + FFX_BROADCAST_FLOAT32X3(0.5)) * cascade.voxel_size;
 
-    // Nothing here before: the next coarser cascade's brick at the voxel's centre, which this bake left alone.
+    // Nothing here before: the next finer cascade's bricks inside the voxel, which see it in more detail and were rebuilt more recently.
+    if (GetSlotConstants().carry != 0u && GetSlotConstants().finer_cascade_index != 0xffffffffu &&
+        FfxBrixelizerGISlotsSeedFromFiner(slot, cascade.grid_min + FfxFloat32x3(voxel) * cascade.voxel_size, cascade.voxel_size, FfxBrixelizerGISlotsBrickCentreNormal(brick)))
+    {
+        SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDED_FINE, 1u);
+        return;
+    }
+
+    // Else the next coarser cascade's brick at the voxel's centre, which this bake left alone.
     FfxUInt32                seed_slot = FFX_BRIXELIZER_GI_SLOT_INVALID;
     FfxBrixelizerCascadeInfo coarser   = cascade;
     if (GetSlotConstants().carry != 0u && GetSlotConstants().coarser_cascade_index != 0xffffffffu)
