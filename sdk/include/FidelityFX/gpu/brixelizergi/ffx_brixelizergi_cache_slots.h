@@ -169,13 +169,21 @@ void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
             const FfxUInt32x3 previous_voxel = FfxUInt32x3(rel);
             const FfxUInt32   previous_cell  = FfxBrixelizerFlattenPOT((previous_voxel + GetSlotConstants().previous_clipmap_offset) & FFX_BRIXELIZER_CASCADE_WRAP_MASK, FFX_BRIXELIZER_CASCADE_DEGREE);
             const FfxUInt32   slot           = LevelSlotLoad(FfxBrixelizerGISlotLevelBase() + previous_cell);
-            if (slot != FFX_BRIXELIZER_GI_SLOT_INVALID && SlotClaimExchange(slot, GetSlotConstants().claim_tag) != GetSlotConstants().claim_tag)
+            if (slot == FFX_BRIXELIZER_GI_SLOT_INVALID)
+                return;
+            if (SlotClaimExchange(slot, GetSlotConstants().claim_tag) != GetSlotConstants().claim_tag)
             {
                 NewSlotStore(cell, slot);
                 SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMED, 1u);
-                // For the resample: the voxel (18 bits) and the mover (FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS, 512: 9).
-                MoverClaimStore(SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS, 1u), cell | (m << 18u));
             }
+            else
+            {
+                // Another of the body's new bricks took it first: a turn does not map voxels one to one, and two can come from the same one.
+                // This one takes a new slot, copied from it (the allocation and the seed), rather than whatever its own voxel held.
+                NewSlotStore(cell, slot | FFX_BRIXELIZER_GI_SLOT_LOST_FLAG);
+            }
+            // For the resample, both ways: the voxel (18 bits) and the mover (FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS, 512: 9).
+            MoverClaimStore(SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS, 1u), cell | (m << 18u));
             return;
         }
     }

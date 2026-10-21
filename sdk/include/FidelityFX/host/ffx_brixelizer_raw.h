@@ -57,8 +57,8 @@
 /// The size of the raw context specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
-// vkfw patch: + the pending cache updates (ffxBrixelizerRawContextTakeCacheUpdates): 3 + 4096 remaps of 19 uint32s.
-#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(3001885)
+// vkfw patch: + the pending cache updates (ffxBrixelizerRawContextTakeCacheUpdates): 3 + 4096 remaps of 20 uint32s.
+#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(3005981)
 
 #ifdef __cplusplus
 extern "C" {
@@ -630,6 +630,7 @@ typedef struct FfxBrixelizerRawMoverRemap
     float    boundsMin[3];
     float    boundsMax[3];
     uint32_t cascadeIndex;   ///< The merged cascade (raw index) the remap is for.
+    uint32_t moverID;        ///< The mover's instance ID: two rebuilds of a cascade before a take compose into one remap.
 } FfxBrixelizerRawMoverRemap;
 
 /// vkfw patch: the merged cascades rebuilt since the last call (bit per raw cascade index) and the mover remaps of those rebuilds, taken: the

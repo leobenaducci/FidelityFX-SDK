@@ -198,6 +198,8 @@ static bool affineInverse(const float* m, float* out)
 static void recordLevelCacheUpdate(FfxBrixelizerContext_Private* context, uint32_t level)
 {
     uint32_t numRemaps = 0;
+    // Movers are baked only into a level's mover or dynamic cascade: without either there is nothing of theirs to carry.
+    const bool bakesMovers = (context->cascades[level].flags & (FFX_BRIXELIZER_CASCADE_MOVER | FFX_BRIXELIZER_CASCADE_DYNAMIC)) != 0;
     for (uint32_t r = 0; r < FFX_BRIXELIZER_MAX_MOVER_RECORDS; ++r) {
         FfxBrixelizerMoverRecord *record = &context->moverRecords[r];
         if (record->instanceID == FFX_BRIXELIZER_NO_MOVER_RECORD) continue;
@@ -205,7 +207,7 @@ static void recordLevelCacheUpdate(FfxBrixelizerContext_Private* context, uint32
         if (!instanceInCascade(instance, level)) continue;
         const float *current = (const float*)&record->current;
         float *baked = (float*)&record->baked[level];
-        if ((record->bakedLevelMask & (1u << level)) && memcmp(current, baked, 12 * sizeof(float)) != 0) {
+        if (bakesMovers && (record->bakedLevelMask & (1u << level)) && memcmp(current, baked, 12 * sizeof(float)) != 0) {
             float currentInverse[12];
             if (affineInverse(current, currentInverse) && numRemaps < FFX_BRIXELIZER_MAX_MOVER_RECORDS) {
                 FfxBrixelizerRawMoverRemap *remap = &context->remapScratch[numRemaps++];
@@ -213,6 +215,7 @@ static void recordLevelCacheUpdate(FfxBrixelizerContext_Private* context, uint32
                 memcpy(remap->boundsMin, record->currentAABB.min, sizeof(remap->boundsMin));
                 memcpy(remap->boundsMax, record->currentAABB.max, sizeof(remap->boundsMax));
                 remap->cascadeIndex = 0;
+                remap->moverID      = record->instanceID;
             }
         }
         memcpy(baked, current, 12 * sizeof(float));
@@ -1072,6 +1075,38 @@ FfxErrorCode ffxBrixelizerUpdateInstanceTransforms(FfxBrixelizerContext* uncastC
         }
         RETURN_ON_FAIL(ffxBrixelizerRawContextUpdateInstances(&context->context, &instanceID, &transforms[i], &aabbs[i].min, &aabbs[i].max, 1));
     }
+    return FFX_OK;
+}
+
+FfxErrorCode ffxBrixelizerSetInstanceCascadeRange(FfxBrixelizerContext* uncastContext, FfxBrixelizerInstanceID instanceID, uint32_t minCascade, uint32_t maxCascade)
+{
+    FFX_RETURN_ON_ERROR(uncastContext, FFX_ERROR_INVALID_POINTER);
+    FfxBrixelizerContext_Private *context = (FfxBrixelizerContext_Private*)uncastContext;
+    FFX_RETURN_ON_ERROR(instanceID < FFX_BRIXELIZER_MAX_INSTANCES && minCascade <= maxCascade, FFX_ERROR_INVALID_ARGUMENT);
+    FfxBrixelizerInstance *instance = &context->instances[context->instanceIndices[instanceID]];
+    FFX_RETURN_ON_ERROR(instance->id == instanceID && !instance->isMover, FFX_ERROR_INVALID_ARGUMENT);
+    if (maxCascade >= context->numCascades) {
+        maxCascade = context->numCascades - 1;
+    }
+    if (minCascade > maxCascade) {
+        minCascade = maxCascade;
+    }
+
+    // The levels in one band and not the other, as runs: each an invalidation of the instance's box on those levels.
+    const uint32_t oldMin = instance->minCascade, oldMax = instance->maxCascade;
+    uint32_t runStart = UINT32_MAX;
+    for (uint32_t level = 0; level <= context->numCascades; ++level) {
+        const bool inOld = level < context->numCascades && level >= oldMin && level <= oldMax;
+        const bool inNew = level < context->numCascades && level >= minCascade && level <= maxCascade;
+        if (inOld != inNew) {
+            if (runStart == UINT32_MAX) runStart = level;
+        } else if (runStart != UINT32_MAX) {
+            addInvalidationJob(context, instance->aabb, runStart, level - 1, 0);
+            runStart = UINT32_MAX;
+        }
+    }
+    instance->minCascade = minCascade;
+    instance->maxCascade = maxCascade;
     return FFX_OK;
 }
 

@@ -2180,7 +2180,31 @@ FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* unca
         context->numTakenRemaps   = 0;
     }
     context->pendingCacheCascadeMask |= 1u << cascadeIndex;
-    for (uint32_t i = 0; i < numRemaps && context->numPendingRemaps < FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS; ++i) {
+    for (uint32_t i = 0; i < numRemaps; ++i) {
+        // A second rebuild of the cascade before the GI took the first: the caches are still as the first's predecessor left them, so the
+        // two moves compose (previous <- first <- now).
+        FfxBrixelizerRawMoverRemap *existing = NULL;
+        for (uint32_t j = 0; j < context->numPendingRemaps; ++j) {
+            if (context->pendingRemaps[j].cascadeIndex == cascadeIndex && context->pendingRemaps[j].moverID == remaps[i].moverID) {
+                existing = &context->pendingRemaps[j];
+                break;
+            }
+        }
+        if (existing) {
+            const float *a = existing->currentToPrevious, *b = remaps[i].currentToPrevious;
+            float composed[12];
+            for (uint32_t r = 0; r < 3; ++r) {
+                for (uint32_t c = 0; c < 4; ++c) {
+                    composed[r * 4 + c] = a[r * 4 + 0] * b[0 * 4 + c] + a[r * 4 + 1] * b[1 * 4 + c] + a[r * 4 + 2] * b[2 * 4 + c] + (c == 3 ? a[r * 4 + 3] : 0.0f);
+                }
+            }
+            memcpy(existing->currentToPrevious, composed, sizeof(composed));
+            memcpy(existing->boundsMin, remaps[i].boundsMin, sizeof(existing->boundsMin));
+            memcpy(existing->boundsMax, remaps[i].boundsMax, sizeof(existing->boundsMax));
+            continue;
+        }
+        if (context->numPendingRemaps >= FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS)
+            continue;
         context->pendingRemaps[context->numPendingRemaps] = remaps[i];
         context->pendingRemaps[context->numPendingRemaps].cascadeIndex = cascadeIndex;
         ++context->numPendingRemaps;

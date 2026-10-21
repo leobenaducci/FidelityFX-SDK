@@ -36,8 +36,8 @@
 // time rather than as a buffer overrun at run time.
 // vkfw patch: 6069910 -> 6135470 for the mover cascades: FfxBrixelizerInstance gains a uint32 (65536) and FfxBrixelizerCascadePrivate
 // a mover index (24); then 6135470 -> 6135670 for the extra level updates: each cascade's placement (7 * 24) and the level job pointer.
-// Then 6135670 -> 6213500: the raw context it embeds grew by its pending cache updates (77827), and the mover records' pointer.
-#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6213500)
+// Then 6135670 -> 6217596: the raw context it embeds grew by its pending cache updates (81923), and the mover records' pointer.
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6217596)
 
 /// The size of the update description specified in 32bit values.
 ///
@@ -399,6 +399,13 @@ FFX_API FfxErrorCode ffxBrixelizerGetRawContext(FfxBrixelizerContext* context, F
 /// @ingroup ffxBrixelizer
 FFX_API FfxErrorCode ffxBrixelizerUpdateInstanceTransforms(FfxBrixelizerContext* context, const FfxBrixelizerInstanceID* instanceIDs, const FfxFloat32x3x4* transforms,
                                                            const FfxBrixelizerAABB* aabbs, uint32_t numInstances);
+
+/// vkfw patch: change a static instance's band (the levels it is baked into, inclusive) in place. Only the levels that join or leave the
+/// band are invalidated: a level both bands share keeps its bricks and is not rebuilt. A LOD handover makes a finer level's instance for the
+/// fine levels and narrows the coarser instance's band to the rest, rebuilding only the levels that changed hands.
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerSetInstanceCascadeRange(FfxBrixelizerContext* context, FfxBrixelizerInstanceID instanceID, uint32_t minCascade, uint32_t maxCascade);
 
 /// vkfw patch: the levels whose static cascade has invalidations pending (bit L for level L).
 ///
