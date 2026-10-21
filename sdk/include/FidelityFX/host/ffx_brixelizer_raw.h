@@ -57,7 +57,8 @@
 /// The size of the raw context specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
-#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(2924058)
+// vkfw patch: + the pending cache updates (ffxBrixelizerRawContextTakeCacheUpdates): 3 + 4096 remaps of 19 uint32s.
+#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(3001885)
 
 #ifdef __cplusplus
 extern "C" {
@@ -613,6 +614,35 @@ FFX_API FfxErrorCode ffxBrixelizerRawContextDestroyInstances(FfxBrixelizerRawCon
 ///
 /// @ingroup ffxBrixelizer
 FFX_API FfxErrorCode ffxBrixelizerRawContextFlushInstances(FfxBrixelizerRawContext* context, FfxCommandList cmdList);
+
+/// vkfw patch: move instances in place: their AABB and transform, uploaded with the next flush as new instances are. The bricks they are in
+/// are not touched: what rebuilds them is the caller's (the high-level API rebuilds the mover cascades they are in).
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerRawContextUpdateInstances(FfxBrixelizerRawContext* context, const FfxBrixelizerInstanceID* instanceIDs, const FfxFloat32x3x4* transforms,
+                                                            const float (*aabbMins)[3], const float (*aabbMaxs)[3], uint32_t numInstances);
+
+/// vkfw patch: what a rebuild of a merged cascade asks of the caches indexed by its bricks: the body that moved since that cascade's last
+/// rebuild, a 3x4 row-major map from where it is now to where it was then, and its world bounds now.
+typedef struct FfxBrixelizerRawMoverRemap
+{
+    float    currentToPrevious[12];
+    float    boundsMin[3];
+    float    boundsMax[3];
+    uint32_t cascadeIndex;   ///< The merged cascade (raw index) the remap is for.
+} FfxBrixelizerRawMoverRemap;
+
+/// vkfw patch: the merged cascades rebuilt since the last call (bit per raw cascade index) and the mover remaps of those rebuilds, taken: the
+/// next call starts empty. The remaps stay valid until the next update. Brixelizer GI takes them in its dispatch
+/// (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS).
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerRawContextTakeCacheUpdates(FfxBrixelizerRawContext* context, uint32_t* outCascadeMask, const FfxBrixelizerRawMoverRemap** outRemaps, uint32_t* outNumRemaps);
+
+/// vkfw patch: record a merged cascade's rebuild and its remaps for the next ffxBrixelizerRawContextTakeCacheUpdates (the high-level API does).
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* context, uint32_t cascadeIndex, const FfxBrixelizerRawMoverRemap* remaps, uint32_t numRemaps);
 
 /// Register a vertex or index buffer for use with Brixelizer.
 ///

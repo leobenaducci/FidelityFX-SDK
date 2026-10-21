@@ -127,8 +127,10 @@
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_NEW_SLOTS                            124
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST                            125
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_COUNTERS                        126
+// vkfw patch: the voxels a moved body's brick took a slot through its motion (ClaimMover), and by which mover: the resample's work list.
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_MOVER_CLAIMS                         127
 
-#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                127
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                128
 
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_GI_CONSTANTS                    0
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_PASS_CONSTANTS                  1

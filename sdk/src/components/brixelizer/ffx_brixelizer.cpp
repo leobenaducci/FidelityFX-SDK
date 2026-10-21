@@ -26,6 +26,7 @@
 #include <string.h> // memset
 #include <math.h> // floorf
 #include <stdbool.h>
+#include <stdlib.h> // malloc
 
 #define ifor(n) for (uint32_t i = 0; i < n; ++i)
 #define jfor(n) for (uint32_t j = 0; j < n; ++j)
@@ -135,12 +136,90 @@ typedef struct FfxBrixelizerContext_Private {
     FfxBrixelizerScratchSpace   scratchSpace;
     // vkfw patch: the jobs of one cascade of an extra level (extraLevelMask), built as each is updated (the raw update copies them out).
     FfxBrixelizerRawJobDescription* levelJobs;
+    // vkfw patch: the movers' records (FfxBrixelizerMoverRecord), the record of each instance id (FFX_BRIXELIZER_NO_MOVER_RECORD if none),
+    // the free records, and the remaps a level's rebuild hands the raw context.
+    struct FfxBrixelizerMoverRecord* moverRecords;
+    uint32_t*                        moverRecordOfInstance;
+    uint32_t*                        freeMoverRecords;
+    uint32_t                         numFreeMoverRecords;
+    FfxBrixelizerRawMoverRemap*      remapScratch;
 } FfxBrixelizerContext_Private;
+
+// vkfw patch: what a mover's transform was the last time each level rebuilt it, so that the next rebuild can tell the caches how far it moved.
+#define FFX_BRIXELIZER_MAX_MOVER_RECORDS 4096
+#define FFX_BRIXELIZER_NO_MOVER_RECORD   0xffffffffu
+typedef struct FfxBrixelizerMoverRecord {
+    FfxFloat32x3x4    current;
+    FfxBrixelizerAABB currentAABB;
+    FfxFloat32x3x4    baked[FFX_BRIXELIZER_MAX_CASCADES];
+    uint32_t          bakedLevelMask;
+    FfxBrixelizerInstanceID instanceID;
+} FfxBrixelizerMoverRecord;
 
 // vkfw patch: the capacity of levelJobs: every instance, and every invalidation.
 #define FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY (2 * FFX_BRIXELIZER_MAX_INSTANCES)
 
 FFX_STATIC_ASSERT(sizeof(FfxBrixelizerContext) >= sizeof(FfxBrixelizerContext_Private));
+
+// vkfw patch: a * b for 3x4 row-major affine transforms (the missing row 0 0 0 1).
+static void affineMultiply(const float* a, const float* b, float* out)
+{
+    for (uint32_t r = 0; r < 3; ++r) {
+        for (uint32_t c = 0; c < 4; ++c) {
+            float v = a[r * 4 + 0] * b[0 * 4 + c] + a[r * 4 + 1] * b[1 * 4 + c] + a[r * 4 + 2] * b[2 * 4 + c];
+            if (c == 3) v += a[r * 4 + 3];
+            out[r * 4 + c] = v;
+        }
+    }
+}
+
+// vkfw patch: the inverse of a 3x4 row-major affine transform; false if it is singular.
+static bool affineInverse(const float* m, float* out)
+{
+    const float a = m[0], b = m[1], c = m[2], d = m[4], e = m[5], f = m[6], g = m[8], h = m[9], k = m[10];
+    const float det = a * (e * k - f * h) - b * (d * k - f * g) + c * (d * h - e * g);
+    if (fabsf(det) < 1.0e-12f) return false;
+    const float inv = 1.0f / det;
+    const float r[9] = {
+        (e * k - f * h) * inv, (c * h - b * k) * inv, (b * f - c * e) * inv,
+        (f * g - d * k) * inv, (a * k - c * g) * inv, (c * d - a * f) * inv,
+        (d * h - e * g) * inv, (b * g - a * h) * inv, (a * e - b * d) * inv,
+    };
+    for (uint32_t row = 0; row < 3; ++row) {
+        out[row * 4 + 0] = r[row * 3 + 0];
+        out[row * 4 + 1] = r[row * 3 + 1];
+        out[row * 4 + 2] = r[row * 3 + 2];
+        out[row * 4 + 3] = -(r[row * 3 + 0] * m[3] + r[row * 3 + 1] * m[7] + r[row * 3 + 2] * m[11]);
+    }
+    return true;
+}
+
+// vkfw patch: a level's rebuild, for the caches: the merged cascade rebuilt, and the move since the level's last rebuild of each mover in it.
+static void recordLevelCacheUpdate(FfxBrixelizerContext_Private* context, uint32_t level)
+{
+    uint32_t numRemaps = 0;
+    for (uint32_t r = 0; r < FFX_BRIXELIZER_MAX_MOVER_RECORDS; ++r) {
+        FfxBrixelizerMoverRecord *record = &context->moverRecords[r];
+        if (record->instanceID == FFX_BRIXELIZER_NO_MOVER_RECORD) continue;
+        const FfxBrixelizerInstance *instance = &context->instances[context->instanceIndices[record->instanceID]];
+        if (!instanceInCascade(instance, level)) continue;
+        const float *current = (const float*)&record->current;
+        float *baked = (float*)&record->baked[level];
+        if ((record->bakedLevelMask & (1u << level)) && memcmp(current, baked, 12 * sizeof(float)) != 0) {
+            float currentInverse[12];
+            if (affineInverse(current, currentInverse) && numRemaps < FFX_BRIXELIZER_MAX_MOVER_RECORDS) {
+                FfxBrixelizerRawMoverRemap *remap = &context->remapScratch[numRemaps++];
+                affineMultiply(baked, currentInverse, remap->currentToPrevious);
+                memcpy(remap->boundsMin, record->currentAABB.min, sizeof(remap->boundsMin));
+                memcpy(remap->boundsMax, record->currentAABB.max, sizeof(remap->boundsMax));
+                remap->cascadeIndex = 0;
+            }
+        }
+        memcpy(baked, current, 12 * sizeof(float));
+        record->bakedLevelMask |= 1u << level;
+    }
+    ffxBrixelizerRawContextAddCacheUpdate(&context->context, context->cascades[level].mergedIndex, context->remapScratch, numRemaps);
+}
 
 // vkfw patch: the jobs of one source cascade of a level, for an extra update (extraLevelMask), as the scheduled update's are made in
 // ffxBrixelizerBakeUpdate: the static cascade's instances and, consumed if consume is set, its pending invalidations; the mover cascade's
@@ -326,9 +405,21 @@ FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* d
 
     outContext->numCascades = desc->numCascades;
     outContext->levelJobs = (FfxBrixelizerRawJobDescription*)malloc(FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY * sizeof(FfxBrixelizerRawJobDescription));
-    if (!outContext->levelJobs) {
+    outContext->moverRecords = (FfxBrixelizerMoverRecord*)malloc(FFX_BRIXELIZER_MAX_MOVER_RECORDS * sizeof(FfxBrixelizerMoverRecord));
+    outContext->moverRecordOfInstance = (uint32_t*)malloc(FFX_BRIXELIZER_MAX_INSTANCES * sizeof(uint32_t));
+    outContext->freeMoverRecords = (uint32_t*)malloc(FFX_BRIXELIZER_MAX_MOVER_RECORDS * sizeof(uint32_t));
+    outContext->remapScratch = (FfxBrixelizerRawMoverRemap*)malloc(FFX_BRIXELIZER_MAX_MOVER_RECORDS * sizeof(FfxBrixelizerRawMoverRemap));
+    if (!outContext->levelJobs || !outContext->moverRecords || !outContext->moverRecordOfInstance || !outContext->freeMoverRecords || !outContext->remapScratch) {
         return FFX_ERROR_OUT_OF_MEMORY;
     }
+    ifor (FFX_BRIXELIZER_MAX_INSTANCES) {
+        outContext->moverRecordOfInstance[i] = FFX_BRIXELIZER_NO_MOVER_RECORD;
+    }
+    ifor (FFX_BRIXELIZER_MAX_MOVER_RECORDS) {
+        outContext->freeMoverRecords[i] = FFX_BRIXELIZER_MAX_MOVER_RECORDS - 1 - i;
+        outContext->moverRecords[i].instanceID = FFX_BRIXELIZER_NO_MOVER_RECORD;
+    }
+    outContext->numFreeMoverRecords = FFX_BRIXELIZER_MAX_MOVER_RECORDS;
 
     return FFX_OK;
 }
@@ -342,6 +433,10 @@ FfxErrorCode ffxBrixelizerContextDestroy(FfxBrixelizerContext* uncastContext)
         return result;
     }
     free(context->levelJobs);
+    free(context->moverRecords);
+    free(context->moverRecordOfInstance);
+    free(context->freeMoverRecords);
+    free(context->remapScratch);
     memset(context, 0, sizeof(*context));
     return FFX_OK;
 }
@@ -625,8 +720,9 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
     }
     ffxBrixelizerRawContextMergeCascades3(&context->context, staticCascadeIndex, moverCascadeIndex, dynamicCascadeIndex, mergedCascadeIndex);
     ffxBrixelizerRawContextBuildAABBTree(&context->context, mergedCascadeIndex);
+    recordLevelCacheUpdate(context, cascadeIndex);
 
-    // vkfw patch: the extra levels (extraLevelMask), at their own placement: their mover and dynamic cascades rebuilt, their static one too
+    // vkfw patch: the extra levels(extraLevelMask), at their own placement: their mover and dynamic cascades rebuilt, their static one too
     // where it is asked for and has invalidations pending, then merged.
     ifor (context->numCascades) {
         if (!(desc->extraLevelMask & (1u << i))) continue;
@@ -661,6 +757,7 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
         }
         ffxBrixelizerRawContextMergeCascades3(&context->context, level->staticIndex, level->moverIndex, level->dynamicIndex, level->mergedIndex);
         ffxBrixelizerRawContextBuildAABBTree(&context->context, level->mergedIndex);
+        recordLevelCacheUpdate(context, i);
     }
 
     ffxBrixelizerRawContextEnd(&context->context);
@@ -897,6 +994,17 @@ FfxErrorCode ffxBrixelizerCreateInstances(FfxBrixelizerContext* uncastContext, c
             instance->isMover = (desc->flags & FFX_BRIXELIZER_INSTANCE_FLAG_MOVER) ? 1 : 0;
             context->instanceIndices[instanceID] = instanceIndex;
 
+            // vkfw patch: a mover's record (none past FFX_BRIXELIZER_MAX_MOVER_RECORDS: its moves then carry no cache).
+            if (instance->isMover && context->numFreeMoverRecords > 0) {
+                const uint32_t recordIndex = context->freeMoverRecords[--context->numFreeMoverRecords];
+                FfxBrixelizerMoverRecord *record = &context->moverRecords[recordIndex];
+                memcpy(&record->current, &desc->transform, sizeof(record->current));
+                record->currentAABB    = desc->aabb;
+                record->bakedLevelMask = 0;
+                record->instanceID     = instanceID;
+                context->moverRecordOfInstance[instanceID] = recordIndex;
+            }
+
             addInvalidationJob(context, desc->aabb, minCascade, maxCascade, instance->isMover);
 
             if (desc->outInstanceID) {
@@ -922,6 +1030,14 @@ FfxErrorCode ffxBrixelizerDeleteInstances(FfxBrixelizerContext* uncastContext, c
 
         addInvalidationJob(context, instance.aabb, instance.minCascade, instance.maxCascade, instance.isMover);
 
+        // vkfw patch: its mover record goes back.
+        const uint32_t recordIndex = context->moverRecordOfInstance[instanceID];
+        if (recordIndex != FFX_BRIXELIZER_NO_MOVER_RECORD) {
+            context->moverRecords[recordIndex].instanceID = FFX_BRIXELIZER_NO_MOVER_RECORD;
+            context->freeMoverRecords[context->numFreeMoverRecords++] = recordIndex;
+            context->moverRecordOfInstance[instanceID] = FFX_BRIXELIZER_NO_MOVER_RECORD;
+        }
+
         instance = context->instances[--context->numStaticInstances];
         context->instances[index] = instance;
         context->instanceIndices[instance.id] = index;
@@ -935,6 +1051,28 @@ FfxErrorCode ffxBrixelizerGetContextInfo(FfxBrixelizerContext* uncastContext, Ff
     FfxBrixelizerContext_Private *context = (FfxBrixelizerContext_Private*)uncastContext;
 
     return ffxBrixelizerRawContextGetInfo(&context->context, contextInfo);
+}
+
+FfxErrorCode ffxBrixelizerUpdateInstanceTransforms(FfxBrixelizerContext* uncastContext, const FfxBrixelizerInstanceID* instanceIDs, const FfxFloat32x3x4* transforms,
+                                                   const FfxBrixelizerAABB* aabbs, uint32_t numInstances)
+{
+    FFX_RETURN_ON_ERROR(uncastContext && (numInstances == 0 || (instanceIDs && transforms && aabbs)), FFX_ERROR_INVALID_POINTER);
+    FfxBrixelizerContext_Private *context = (FfxBrixelizerContext_Private*)uncastContext;
+
+    ifor (numInstances) {
+        const FfxBrixelizerInstanceID instanceID = instanceIDs[i];
+        FFX_RETURN_ON_ERROR(instanceID < FFX_BRIXELIZER_MAX_INSTANCES, FFX_ERROR_INVALID_ARGUMENT);
+        FfxBrixelizerInstance *instance = &context->instances[context->instanceIndices[instanceID]];
+        FFX_RETURN_ON_ERROR(instance->id == instanceID && instance->isMover, FFX_ERROR_INVALID_ARGUMENT);
+        instance->aabb = aabbs[i];
+        const uint32_t recordIndex = context->moverRecordOfInstance[instanceID];
+        if (recordIndex != FFX_BRIXELIZER_NO_MOVER_RECORD) {
+            memcpy(&context->moverRecords[recordIndex].current, &transforms[i], sizeof(FfxFloat32x3x4));
+            context->moverRecords[recordIndex].currentAABB = aabbs[i];
+        }
+        RETURN_ON_FAIL(ffxBrixelizerRawContextUpdateInstances(&context->context, &instanceID, &transforms[i], &aabbs[i].min, &aabbs[i].max, 1));
+    }
+    return FFX_OK;
 }
 
 FfxErrorCode ffxBrixelizerGetPendingStaticInvalidationMask(FfxBrixelizerContext* uncastContext, uint32_t* outLevelMask)

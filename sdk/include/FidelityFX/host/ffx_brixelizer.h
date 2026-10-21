@@ -36,7 +36,8 @@
 // time rather than as a buffer overrun at run time.
 // vkfw patch: 6069910 -> 6135470 for the mover cascades: FfxBrixelizerInstance gains a uint32 (65536) and FfxBrixelizerCascadePrivate
 // a mover index (24); then 6135470 -> 6135670 for the extra level updates: each cascade's placement (7 * 24) and the level job pointer.
-#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6135670)
+// Then 6135670 -> 6213500: the raw context it embeds grew by its pending cache updates (77827), and the mover records' pointer.
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6213500)
 
 /// The size of the update description specified in 32bit values.
 ///
@@ -390,6 +391,15 @@ FFX_API FfxErrorCode ffxBrixelizerGetRawContext(FfxBrixelizerContext* context, F
 /// merged cascades are contiguous and level L's static cascade, if every level has one, is L.
 ///
 /// @ingroup ffxBrixelizer
+/// vkfw patch: move instances created with FFX_BRIXELIZER_INSTANCE_FLAG_MOVER in place: their transform (row-major 3x4, as at creation) and
+/// world AABB. The mover cascades they are in rebuild them where they are now on their next update (they are reset each update), and each
+/// level's rebuild records the move since that level's last one for the caches (ffxBrixelizerRawContextTakeCacheUpdates), so Brixelizer GI
+/// carries the moved bricks' caches along, rotations included. Instances that are not movers are an error.
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerUpdateInstanceTransforms(FfxBrixelizerContext* context, const FfxBrixelizerInstanceID* instanceIDs, const FfxFloat32x3x4* transforms,
+                                                           const FfxBrixelizerAABB* aabbs, uint32_t numInstances);
+
 /// vkfw patch: the levels whose static cascade has invalidations pending (bit L for level L).
 ///
 /// @ingroup ffxBrixelizer

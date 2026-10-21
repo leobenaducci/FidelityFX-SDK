@@ -1754,8 +1754,13 @@ static void brixelizerFlushInstances(FfxBrixelizerRawContext_Private* context, F
                      sizeof(FfxFloat32x3x4),
                      L"Instance Transform");
 
-        context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, cmdList, context->effectContextId);
+        // vkfw patch: in batches (two copies an instance, FFX_MAX_GPU_JOBS in the queue), not one execution an instance: moving bodies
+        // re-upload every frame.
+        if ((i + 1) % 64 == 0)
+            context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, cmdList, context->effectContextId);
     }
+    if (context->hostNewInstanceListSize % 64 != 0)
+        context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, cmdList, context->effectContextId);
 
     clearHostNewInstanceList(context);
 }
@@ -2124,6 +2129,62 @@ FfxErrorCode ffxBrixelizerRawContextDestroyInstances(FfxBrixelizerRawContext* un
     context->hostFreelistSize += numInstanceIDs;
     context->numInstances -= numInstanceIDs;
 
+    return FFX_OK;
+}
+
+FfxErrorCode ffxBrixelizerRawContextUpdateInstances(FfxBrixelizerRawContext* uncastContext, const FfxBrixelizerInstanceID* instanceIDs, const FfxFloat32x3x4* transforms,
+                                                    const float (*aabbMins)[3], const float (*aabbMaxs)[3], uint32_t numInstances)
+{
+    FFX_RETURN_ON_ERROR(uncastContext, FFX_ERROR_INVALID_POINTER);
+    FfxBrixelizerRawContext_Private* context = (FfxBrixelizerRawContext_Private*)(uncastContext);
+
+    for (uint32_t i = 0; i < numInstances; ++i) {
+        const FfxBrixelizerInstanceID instanceID = instanceIDs[i];
+        FFX_RETURN_ON_ERROR(instanceID < FFX_BRIXELIZER_MAX_INSTANCES, FFX_ERROR_INVALID_ARGUMENT);
+        FfxBrixelizerInstanceInfo *instanceInfo = &context->hostInstances[instanceID];
+        for (uint32_t j = 0; j < 3; ++j) {
+            instanceInfo->aabbMin[j] = aabbMins[i][j];
+            instanceInfo->aabbMax[j] = aabbMaxs[i][j];
+        }
+        memcpy(&context->hostTransforms[instanceID], &transforms[i], sizeof(FfxFloat32x3x4));
+        // Uploaded with the new ones (an instance twice in the list is uploaded twice, the same data).
+        if (context->hostNewInstanceListSize < FFX_BRIXELIZER_MAX_INSTANCES)
+            context->hostNewInstanceList[context->hostNewInstanceListSize++] = instanceID;
+    }
+    return FFX_OK;
+}
+
+FfxErrorCode ffxBrixelizerRawContextTakeCacheUpdates(FfxBrixelizerRawContext* uncastContext, uint32_t* outCascadeMask, const FfxBrixelizerRawMoverRemap** outRemaps, uint32_t* outNumRemaps)
+{
+    FFX_RETURN_ON_ERROR(uncastContext && outCascadeMask && outRemaps && outNumRemaps, FFX_ERROR_INVALID_POINTER);
+    FfxBrixelizerRawContext_Private* context = (FfxBrixelizerRawContext_Private*)(uncastContext);
+
+    *outCascadeMask = context->pendingCacheCascadeMask;
+    *outRemaps      = context->pendingRemaps;
+    *outNumRemaps   = context->numPendingRemaps;
+    // The array stays as it is until the next update adds to it (which starts it over).
+    context->pendingCacheCascadeMask = 0;
+    context->numTakenRemaps          = context->numPendingRemaps;
+    return FFX_OK;
+}
+
+FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* uncastContext, uint32_t cascadeIndex, const FfxBrixelizerRawMoverRemap* remaps, uint32_t numRemaps)
+{
+    FFX_RETURN_ON_ERROR(uncastContext, FFX_ERROR_INVALID_POINTER);
+    FFX_RETURN_ON_ERROR(cascadeIndex < FFX_BRIXELIZER_MAX_CASCADES, FFX_ERROR_INVALID_ARGUMENT);
+    FfxBrixelizerRawContext_Private* context = (FfxBrixelizerRawContext_Private*)(uncastContext);
+
+    // Taken since the last add: start the array over.
+    if (context->numTakenRemaps != 0) {
+        context->numPendingRemaps = 0;
+        context->numTakenRemaps   = 0;
+    }
+    context->pendingCacheCascadeMask |= 1u << cascadeIndex;
+    for (uint32_t i = 0; i < numRemaps && context->numPendingRemaps < FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS; ++i) {
+        context->pendingRemaps[context->numPendingRemaps] = remaps[i];
+        context->pendingRemaps[context->numPendingRemaps].cascadeIndex = cascadeIndex;
+        ++context->numPendingRemaps;
+    }
     return FFX_OK;
 }
 

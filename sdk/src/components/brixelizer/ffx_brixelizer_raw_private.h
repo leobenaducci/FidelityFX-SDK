@@ -107,6 +107,10 @@ static const FfxBrixelizerUploadBufferMetaData uploadBufferMetaData[] = {
 
 #define FFX_BRIXELIZER_NUM_UPLOAD_BUFFERS FFX_ARRAY_ELEMENTS(uploadBufferMetaData)
 
+// vkfw patch: the mover remaps kept between takes (ffxBrixelizerRawContextTakeCacheUpdates); past this, a rebuild's remaps are dropped (its
+// moved bricks then keep the slot of their voxel, or take a new one).
+#define FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS 4096
+
 typedef struct BufferBindingInfo
 {
     uint32_t offset;
@@ -196,4 +200,9 @@ typedef struct FfxBrixelizerRawContext_Private
     uint32_t                        bufferIndexFreeList[FFX_BRIXELIZER_MAX_INSTANCES];
     uint32_t                        bufferIndexFreeListSize;
     uint32_t                refCount;
+    // vkfw patch: ffxBrixelizerRawContextTakeCacheUpdates: merged cascades rebuilt and mover remaps, since the last take.
+    uint32_t                         pendingCacheCascadeMask;
+    uint32_t                         numPendingRemaps;
+    uint32_t                         numTakenRemaps;
+    FfxBrixelizerRawMoverRemap       pendingRemaps[FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS];
 } FfxBrixelizerContext_Private;

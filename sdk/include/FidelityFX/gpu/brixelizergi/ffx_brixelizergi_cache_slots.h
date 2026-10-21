@@ -44,6 +44,8 @@
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_ALLOCATED 10u         // slots the cascade took
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_HISTOGRAM 16u         // 8 buckets: no samples, then one a doubling
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS 32u             // the seed list's length
+#define FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS 33u      // the mover claim list's length (FFX_BRIXELIZER_GI_SLOTS_PASS_RESAMPLE)
+#define FFX_BRIXELIZER_GI_SLOT_COUNTER_RESAMPLED 11u         // slots a mover claim took that the resample turned or shifted
 
 // In the new-slot map between the claims and the allocation: the voxel's slot, which another brick claimed first (a body that moved into it). The
 // brick takes a new slot, copied from that one. Slots are below 2^18.
@@ -127,7 +129,10 @@ void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
         return;
     // The first pass of a cascade's: the seed list is this cascade's alone (a dispatch can run the passes for several).
     if (tid == 0u)
+    {
         SlotCounterExchange(FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS, 0u);
+        SlotCounterExchange(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS, 0u);
+    }
 
     const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
     const FfxBrixelizerCascadeInfo cascade     = GetCascadeInfo(cascade_idx);
@@ -167,6 +172,8 @@ void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
             {
                 NewSlotStore(cell, slot);
                 SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMED, 1u);
+                // For the resample: the voxel (18 bits) and the mover (FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS, 512: 9).
+                MoverClaimStore(SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS, 1u), cell | (m << 18u));
             }
             return;
         }
@@ -442,6 +449,152 @@ const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
 }
 
 #endif // FFX_BRIXELIZER_GI_SLOTS_PASS_SEED
+
+#if defined FFX_BRIXELIZER_GI_SLOTS_PASS_RESAMPLE
+
+// The SH coefficients' scales (FfxBrixelizerGISHGetCoefficients): band 1 C1 for y, z, x; band 2 C4 for xy, yz, xz, C5 for 3z^2 - 1, C6 for
+// x^2 - y^2.
+#define FFX_BRIXELIZER_GI_RESAMPLE_SH_C1 FfxFloat32(0.4886025119029199)
+#define FFX_BRIXELIZER_GI_RESAMPLE_SH_C4 FfxFloat32(1.0925484305920792)
+#define FFX_BRIXELIZER_GI_RESAMPLE_SH_C5 FfxFloat32(0.31539156525252005)
+#define FFX_BRIXELIZER_GI_RESAMPLE_SH_C6 FfxFloat32(0.5462742152960396)
+
+// A slot's 9 packed coefficients (fp16x4: rgb, and w, which is left as it is) as the same function of direction after a rotation: f'(d) =
+// f(M d), M the rotation from now to then. Band 1 is a vector, v' = M^T v; band 2 a traceless quadratic form, Q' = M^T Q M.
+void FfxBrixelizerGISlotsRotateSH(FfxUInt32 base, FfxFloat32x3x3 M, FfxBoolean direct)
+{
+    FfxFloat32x4 c[9];
+    for (FfxUInt32 i = 0u; i < 9u; ++i)
+        c[i] = ffxUnpackF32x2(direct ? LoadBricksDirectSH(base + i) : LoadBricksSH(base + i));
+
+    for (FfxUInt32 channel = 0u; channel < 3u; ++channel)
+    {
+        // f = C1 v.d + d^T Q d (band 0 unchanged)
+        const FfxFloat32x3 v  = FfxFloat32x3(c[3][channel], c[1][channel], c[2][channel]);
+        const FfxFloat32x3 v2 = v * M; // M^T v
+        c[3][channel] = v2.x; c[1][channel] = v2.y; c[2][channel] = v2.z;
+
+        const FfxFloat32 a4 = c[4][channel] * FFX_BRIXELIZER_GI_RESAMPLE_SH_C4;
+        const FfxFloat32 a5 = c[5][channel] * FFX_BRIXELIZER_GI_RESAMPLE_SH_C4;
+        const FfxFloat32 a6 = c[6][channel] * FFX_BRIXELIZER_GI_RESAMPLE_SH_C5;
+        const FfxFloat32 a7 = c[7][channel] * FFX_BRIXELIZER_GI_RESAMPLE_SH_C4;
+        const FfxFloat32 a8 = c[8][channel] * FFX_BRIXELIZER_GI_RESAMPLE_SH_C6;
+        // On the sphere 3z^2 - 1 = 2z^2 - x^2 - y^2.
+        const FfxFloat32x3x3 Q = FfxFloat32x3x3(
+            FfxFloat32x3(a8 - a6, FfxFloat32(0.5) * a4, FfxFloat32(0.5) * a7),
+            FfxFloat32x3(FfxFloat32(0.5) * a4, -a8 - a6, FfxFloat32(0.5) * a5),
+            FfxFloat32x3(FfxFloat32(0.5) * a7, FfxFloat32(0.5) * a5, FfxFloat32(2.0) * a6));
+        const FfxFloat32x3x3 Q2 = transpose(M) * Q * M;
+        c[4][channel] = FfxFloat32(2.0) * Q2[0][1] / FFX_BRIXELIZER_GI_RESAMPLE_SH_C4;
+        c[5][channel] = FfxFloat32(2.0) * Q2[1][2] / FFX_BRIXELIZER_GI_RESAMPLE_SH_C4;
+        c[6][channel] = FfxFloat32(0.5) * Q2[2][2] / FFX_BRIXELIZER_GI_RESAMPLE_SH_C5;
+        c[7][channel] = FfxFloat32(2.0) * Q2[0][2] / FFX_BRIXELIZER_GI_RESAMPLE_SH_C4;
+        c[8][channel] = FfxFloat32(0.5) * (Q2[0][0] - Q2[1][1]) / FFX_BRIXELIZER_GI_RESAMPLE_SH_C6;
+    }
+
+    for (FfxUInt32 i = 0u; i < 9u; ++i)
+    {
+        const FfxUInt32x2 packed = ffxFloat16x4ToUint32x2(FFX_MIN16_F4(c[i]));
+        if (direct)
+            StoreBricksDirectSH(base + i, packed);
+        else
+            StoreBricksSH(base + i, packed);
+    }
+}
+
+// A slot a moved body's brick took through its motion (ClaimMover): its caches as they were, then, at the voxel the motion took it back to.
+// Turned with the body (the irradiance SH, and the direction its probes saw it from), and the radiance texels resampled where the motion
+// takes each, so that a voxel the body moved into part of the way, or turned in, holds what its surface had.
+void FfxBrixelizerGISlotsResample(FfxUInt32 tid)
+{
+    if (tid >= SlotCounterLoad(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS))
+        return;
+
+    const FfxUInt32 entry = MoverClaimLoad(tid);
+    const FfxUInt32 cell  = entry & ((1u << 18u) - 1u);
+    const FfxUInt32 m     = entry >> 18u;
+    const FfxUInt32 slot  = NewSlotLoad(cell);
+    if (slot == FFX_BRIXELIZER_GI_SLOT_INVALID || (slot & FFX_BRIXELIZER_GI_SLOT_LOST_FLAG) != 0u || m >= GetSlotConstants().num_movers)
+        return;
+
+    const FfxFloat32x4 row0 = GetSlotMoverRow(m, 0u);
+    const FfxFloat32x4 row1 = GetSlotMoverRow(m, 1u);
+    const FfxFloat32x4 row2 = GetSlotMoverRow(m, 2u);
+    // M[i][j]: row i, column j of the linear part (GLSL matrices are column-major: build from columns).
+    FfxFloat32x3x3 M = FfxFloat32x3x3(FfxFloat32x3(row0.x, row1.x, row2.x), FfxFloat32x3(row0.y, row1.y, row2.y), FfxFloat32x3(row0.z, row1.z, row2.z));
+    // A uniform scale out, so that M is the rotation.
+    const FfxFloat32 det = determinant(M);
+    if (abs(det) < FfxFloat32(1.0e-6))
+        return;
+    M = M * (FfxFloat32(1.0) / (sign(det) * pow(abs(det), FfxFloat32(1.0 / 3.0))));
+
+    const FfxBoolean rotated = abs(M[0][0] - FfxFloat32(1.0)) + abs(M[1][1] - FfxFloat32(1.0)) + abs(M[2][2] - FfxFloat32(1.0)) > FfxFloat32(1.0e-4);
+    if (rotated)
+    {
+        FfxBrixelizerGISlotsRotateSH(slot * 9u, M, false);
+        FfxBrixelizerGISlotsRotateSH(slot * 9u, M, true);
+        // The direction the probes saw it from (the state's .xy, fp16x4 xyz): d' = M^T d.
+        FfxUInt32x4  state     = LoadBricksSHState(slot);
+        FfxFloat32x4 seen_from = ffxUnpackF32x2(state.xy);
+        if (dot(seen_from.xyz, seen_from.xyz) > FfxFloat32(0.0))
+            seen_from.xyz = normalize(seen_from.xyz * M);
+        state.xy = ffxFloat16x4ToUint32x2(FFX_MIN16_F4(seen_from));
+        StoreBricksSHState(slot, state);
+    }
+
+    // The radiance texels (centres at uvw = k/3 of the voxel): each where the motion takes its point, within the voxel it came from.
+    const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
+    const FfxBrixelizerCascadeInfo cascade     = GetCascadeInfo(cascade_idx);
+    const FfxUInt32x3  voxel        = (FfxBrixelizerUnflattenPOT(cell, FFX_BRIXELIZER_CASCADE_DEGREE) - cascade.clipmap_offset) & FFX_BRIXELIZER_CASCADE_WRAP_MASK;
+    const FfxFloat32x3 voxel_min    = cascade.grid_min + FfxFloat32x3(voxel) * cascade.voxel_size;
+    const FfxFloat32x3 centre       = voxel_min + FFX_BROADCAST_FLOAT32X3(FfxFloat32(0.5) * cascade.voxel_size);
+    const FfxFloat32x4 centre4      = FfxFloat32x4(centre, 1.0);
+    const FfxFloat32x3 prev_centre  = FfxFloat32x3(dot(row0, centre4), dot(row1, centre4), dot(row2, centre4));
+    const FfxFloat32x3 prev_rel     = (prev_centre - GetSlotConstants().previous_grid_min) / GetSlotConstants().previous_voxel_size;
+    const FfxFloat32x3 prev_vox_min = GetSlotConstants().previous_grid_min + floor(prev_rel) * GetSlotConstants().previous_voxel_size;
+
+    const FfxUInt32x3 base = FfxBrixelizerGetSDFAtlasOffset(slot) / 2;
+    FfxFloat32x3      old_texels[64];
+    FfxBoolean        any_lit = false;
+    for (FfxUInt32 t = 0u; t < 64u; ++t)
+    {
+        old_texels[t] = LoadRadianceCache(base + FfxBrixelizerUnflattenPOT(t, 2));
+        any_lit = any_lit || any(FFX_GREATER_THAN(old_texels[t], FFX_BROADCAST_FLOAT32X3(0.0)));
+    }
+    if (!any_lit)
+        return;
+
+    for (FfxUInt32 t = 0u; t < 64u; ++t)
+    {
+        const FfxFloat32x3 uvw        = FfxFloat32x3(FfxBrixelizerUnflattenPOT(t, 2)) / FfxFloat32(3.0);
+        const FfxFloat32x4 p4         = FfxFloat32x4(voxel_min + uvw * cascade.voxel_size, 1.0);
+        const FfxFloat32x3 prev_p     = FfxFloat32x3(dot(row0, p4), dot(row1, p4), dot(row2, p4));
+        const FfxFloat32x3 prev_uvw   = ffxSaturate((prev_p - prev_vox_min) / GetSlotConstants().previous_voxel_size);
+        // Trilinear over the lit texels, as FfxBrixelizerGISampleRadianceTexels.
+        const FfxFloat32x3 tt = prev_uvw * FfxFloat32(3.0);
+        const FfxUInt32x3  lo = min(FfxUInt32x3(tt), FFX_BROADCAST_UINT32X3(2u));
+        const FfxFloat32x3 f  = tt - FfxFloat32x3(lo);
+        FfxFloat32x3 radiance = FFX_BROADCAST_FLOAT32X3(0.0);
+        FfxFloat32   weight   = FfxFloat32(0.0);
+        for (FfxUInt32 c = 0u; c < 8u; ++c)
+        {
+            const FfxUInt32x3  corner = FfxUInt32x3(c & 1u, (c >> 1u) & 1u, c >> 2u);
+            const FfxUInt32x3  k      = lo + corner;
+            const FfxFloat32x3 texel  = old_texels[k.x + k.y * 4u + k.z * 16u];
+            if (any(FFX_GREATER_THAN(texel, FFX_BROADCAST_FLOAT32X3(0.0))))
+            {
+                const FfxFloat32x3 w3 = ffxLerp(FFX_BROADCAST_FLOAT32X3(1.0) - f, f, FfxFloat32x3(corner));
+                const FfxFloat32   w  = w3.x * w3.y * w3.z;
+                radiance += texel * w;
+                weight += w;
+            }
+        }
+        StoreRadianceCache(base + FfxBrixelizerUnflattenPOT(t, 2), weight > FfxFloat32(0.0) ? radiance / weight : old_texels[t]);
+    }
+    SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_RESAMPLED, 1u);
+}
+
+#endif // FFX_BRIXELIZER_GI_SLOTS_PASS_RESAMPLE
 
 #if defined FFX_BRIXELIZER_GI_SLOTS_PASS_STATS
 void FfxBrixelizerGISlotsStats(FfxUInt32 tid)

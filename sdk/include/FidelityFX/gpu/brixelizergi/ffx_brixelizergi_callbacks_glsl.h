@@ -570,6 +570,11 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID)
     FfxUInt32 SeedListLoad(FfxUInt32 index) { return g_rw_seed_list.data[index]; }
     void SeedListStore(FfxUInt32 index, FfxUInt32 value) { g_rw_seed_list.data[index] = value; }
 #endif
+#if defined BRIXELIZER_GI_BIND_UAV_MOVER_CLAIMS
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_MOVER_CLAIMS, std430) coherent buffer BrixelizerGIMoverClaims_t { FfxUInt32 data[]; } g_rw_mover_claims;
+    FfxUInt32 MoverClaimLoad(FfxUInt32 index) { return g_rw_mover_claims.data[index]; }
+    void MoverClaimStore(FfxUInt32 index, FfxUInt32 value) { g_rw_mover_claims.data[index] = value; }
+#endif
 #if defined BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS
     layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS, std430) coherent buffer BrixelizerGISlotCounters_t { FfxUInt32 data[]; } g_rw_slot_counters;
     FfxUInt32 SlotCounterAdd(FfxUInt32 index, FfxUInt32 value) { return atomicAdd(g_rw_slot_counters.data[index], value); }

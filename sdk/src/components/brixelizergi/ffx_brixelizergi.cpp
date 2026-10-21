@@ -87,6 +87,7 @@ static const ResourceBinding uavResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_LEVEL_SLOT_MAPS, L"g_rw_level_slot_maps"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_NEW_SLOTS, L"g_rw_new_slots"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST, L"g_rw_seed_list"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_MOVER_CLAIMS, L"g_rw_mover_claims"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_COUNTERS, L"g_rw_slot_counters"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP, L"g_rw_bctx_brick_slot_map"},
 {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_WRITE, L"g_sdfgi_rw_sky_visibility_history"},
@@ -584,6 +585,14 @@ static FfxErrorCode createPipelineStates(FfxBrixelizerGIContext_Private* pContex
                                                                                 &pipelineDescription,
                                                                                 pContext->effectContextId,
                                                                                 &pContext->pipelineSlotsStats));
+    wcscpy_s(pipelineDescription.name, L"FFX_BRIXELIZER_GI_PASS_SLOTS_RESAMPLE");
+    FFX_VALIDATE(pContext->contextDescription.backendInterface.fpCreatePipeline(&pContext->contextDescription.backendInterface,
+                                                                                FFX_EFFECT_BRIXELIZER_GI,
+                                                                                FFX_BRIXELIZER_GI_PASS_SLOTS_RESAMPLE,
+                                                                                pipelineFlags,
+                                                                                &pipelineDescription,
+                                                                                pContext->effectContextId,
+                                                                                &pContext->pipelineSlotsResample));
 wcscpy_s(pipelineDescription.name, L"FFX_BRIXELIZER_GI_PASS_SPAWN_SCREEN_PROBES");
     FFX_VALIDATE(pContext->contextDescription.backendInterface.fpCreatePipeline(&pContext->contextDescription.backendInterface,
                                                                                 FFX_EFFECT_BRIXELIZER_GI,
@@ -715,6 +724,7 @@ wcscpy_s(pipelineDescription.name, L"FFX_BRIXELIZER_GI_PASS_SPAWN_SCREEN_PROBES"
     patchResourceBindings(&pContext->pipelineSlotsApply);
     patchResourceBindings(&pContext->pipelineSlotsSeed);
     patchResourceBindings(&pContext->pipelineSlotsStats);
+    patchResourceBindings(&pContext->pipelineSlotsResample);
 patchResourceBindings(&pContext->pipelineSpawnScreenProbes);
     patchResourceBindings(&pContext->pipelineReprojectScreenProbes);
     patchResourceBindings(&pContext->pipelineFillScreenProbes);
@@ -1236,6 +1246,15 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
              sizeof(FfxUInt32),
              1,
              FFX_RESOURCE_FLAGS_NONE},
+            {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_MOVER_CLAIMS,
+             L"BrixelizerGI_MoverClaims",
+             FFX_RESOURCE_TYPE_BUFFER,
+             FFX_RESOURCE_USAGE_UAV,
+             FFX_SURFACE_FORMAT_R32_FLOAT,
+             FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * sizeof(FfxUInt32),
+             sizeof(FfxUInt32),
+             1,
+             FFX_RESOURCE_FLAGS_NONE},
             {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST,
              L"BrixelizerGI_SeedList",
              FFX_RESOURCE_TYPE_BUFFER,
@@ -1289,7 +1308,8 @@ static FfxErrorCode brixelizerGICreate(FfxBrixelizerGIContext_Private* pContext,
             // vkfw patch: the slot state exists only with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS, zero-filled (the maps store a slot plus one), and the
             // identity brick -> slot map only without it.
             const FfxUInt32 resourceId = currentSurfaceDescription->id;
-            const bool      bSlotsState = resourceId >= FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_STATE && resourceId <= FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST;
+            const bool      bSlotsState = (resourceId >= FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_STATE && resourceId <= FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST) ||
+                                          resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_MOVER_CLAIMS;
             if ((bSlotsState && !(pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS)) ||
                 (resourceId == FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP && (pContextDescription->flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS)))
             {
@@ -1452,6 +1472,7 @@ static FfxErrorCode brixelizerGIRelease(FfxBrixelizerGIContext_Private* pContext
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSlotsApply, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSlotsSeed, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSlotsStats, pContext->effectContextId);
+    ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSlotsResample, pContext->effectContextId);
 ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineSpawnScreenProbes, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineReprojectScreenProbes, pContext->effectContextId);
     ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext->pipelineFillScreenProbes, pContext->effectContextId);
@@ -1482,6 +1503,7 @@ ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext
     {
         for (uint32_t id = FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_STATE; id <= FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST; ++id)
             ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[id], pContext->effectContextId);
+        ffxSafeReleaseResource(&pContext->contextDescription.backendInterface, pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_MOVER_CLAIMS], pContext->effectContextId);
     }
     else
     {
@@ -1496,7 +1518,8 @@ ffxSafeReleasePipeline(&pContext->contextDescription.backendInterface, &pContext
 
 // vkfw patch: FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: for each merged cascade the bake before this dispatch rebuilt, the slot passes
 // (ffx_brixelizergi_cache_slots.h), then the placement it now has is what the next time compares against.
-static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, const FfxBrixelizerGIDispatchDescription* pDispatchDescription, const FfxBrixelizerContextInfo* pContextInfo)
+static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, const FfxBrixelizerGIDispatchDescription* pDispatchDescription, const FfxBrixelizerContextInfo* pContextInfo,
+                                      uint32_t updatedLevelMask, const FfxBrixelizerRawMoverRemap* remaps, uint32_t numRemaps)
 {
     FfxBrixelizerGISlotConstants& constants = pContext->slotConstants;
     constexpr uint32_t voxels = FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION;
@@ -1504,7 +1527,7 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
     for (uint32_t level = 0; level < FFX_BRIXELIZER_GI_SLOT_LEVELS; ++level)
     {
         const uint32_t cascadeIndex = pDispatchDescription->startCascade + level;
-        if (!(pDispatchDescription->updatedCascadeMask & (1u << level)) || cascadeIndex > pDispatchDescription->endCascade || cascadeIndex >= FFX_BRIXELIZER_MAX_CASCADES)
+        if (!(updatedLevelMask & (1u << level)) || cascadeIndex > pDispatchDescription->endCascade || cascadeIndex >= FFX_BRIXELIZER_MAX_CASCADES)
             continue;
 
         FfxBrixelizerGIContext_Private::SlotLevel& previous = pContext->slotLevels[level];
@@ -1545,6 +1568,19 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
             memcpy(slotMover.bounds_min, mover.boundsMin, 3 * sizeof(float));
             memcpy(slotMover.bounds_max, mover.boundsMax, 3 * sizeof(float));
         }
+        // vkfw patch: and the SDK's own, of the mover instances (ffxBrixelizerUpdateInstanceTransforms), for this merged cascade.
+        for (uint32_t m = 0; m < numRemaps && constants.num_movers < FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS; ++m)
+        {
+            const FfxBrixelizerRawMoverRemap& remap = remaps[m];
+            if (remap.cascadeIndex != cascadeIndex)
+                continue;
+            FfxBrixelizerGISlotMover& slotMover = constants.movers[constants.num_movers++];
+            memcpy(slotMover.transform_row0, remap.currentToPrevious + 0, 4 * sizeof(float));
+            memcpy(slotMover.transform_row1, remap.currentToPrevious + 4, 4 * sizeof(float));
+            memcpy(slotMover.transform_row2, remap.currentToPrevious + 8, 4 * sizeof(float));
+            memcpy(slotMover.bounds_min, remap.boundsMin, 3 * sizeof(float));
+            memcpy(slotMover.bounds_max, remap.boundsMax, 3 * sizeof(float));
+        }
         updateConstantBuffer(pContext, FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_SLOT_CONSTANTS, (void*)&constants);
 
         const uint32_t groups = voxels / 64;
@@ -1554,6 +1590,7 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         scheduleDispatch(pContext, &pContext->pipelineSlotsAlloc, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsApply, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsSeed, groups, 1, 1);
+        scheduleDispatch(pContext, &pContext->pipelineSlotsResample, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsStats, groups, 1, 1);
 
         previous.valid = true;
@@ -1916,9 +1953,22 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
         scheduleDispatch(pContext, &pContext->pipelinePrepareClearCache, 1, 1, 1);
         scheduleIndirectDispatch(pContext, &pContext->pipelineClearCache, pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RAY_SWAP_INDIRECT_ARGS], 0);
     }
-    else if ((pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS) && pDispatchDescription->updatedCascadeMask != 0)
+    else if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS)
     {
-        brixelizerGIScheduleSlots(pContext, pDispatchDescription, &contextInfo);
+        // vkfw patch: the merged cascades the SDK rebuilt since the last dispatch, and the moves of its mover instances, with the application's.
+        uint32_t                          rebuiltCascades = 0;
+        const FfxBrixelizerRawMoverRemap* remaps          = NULL;
+        uint32_t                          numRemaps       = 0;
+        ffxBrixelizerRawContextTakeCacheUpdates(pDispatchDescription->brixelizerContext, &rebuiltCascades, &remaps, &numRemaps);
+        uint32_t updatedLevelMask = pDispatchDescription->updatedCascadeMask;
+        for (uint32_t level = 0; level < FFX_BRIXELIZER_GI_SLOT_LEVELS; ++level)
+        {
+            const uint32_t cascadeIndex = pDispatchDescription->startCascade + level;
+            if (cascadeIndex < FFX_BRIXELIZER_MAX_CASCADES && (rebuiltCascades & (1u << cascadeIndex)))
+                updatedLevelMask |= 1u << level;
+        }
+        if (updatedLevelMask != 0)
+            brixelizerGIScheduleSlots(pContext, pDispatchDescription, &contextInfo, updatedLevelMask, remaps, numRemaps);
     }
 scheduleDispatch(pContext, &pContext->pipelineEmitPrimaryRayRadiance, (bufferWidth / 4 + 7) / 8, (bufferHeight / 4 + 7) / 8, 1);
 
