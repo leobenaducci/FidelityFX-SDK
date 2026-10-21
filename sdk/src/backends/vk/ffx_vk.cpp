@@ -65,6 +65,11 @@ void                   RegisterConstantBufferAllocatorVK(FfxInterface* backendIn
 static VkDeviceContext sVkDeviceContext = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE };
 
 #define MAX_PIPELINE_USAGE_PER_FRAME      (10) // Required to make sure passes that are called more than once per-frame don't have their descriptors overwritten.
+// vkfw patch: the descriptor sets each pipeline cycles through a frame, apart from the global pool's sizing (which keeps
+// MAX_PIPELINE_USAGE_PER_FRAME: that pool is sized for every possible context's every pass, orders of magnitude above what is ever
+// allocated, so a deeper ring for the passes that exist costs nothing it does not already reserve). Brixelizer's extra level updates
+// (FfxBrixelizerUpdateDescription::extraLevelMask) run the AABB tree pass three times a level, up to nine levels a frame.
+#define PIPELINE_DESCRIPTOR_SETS_PER_FRAME (24)
 #define MAX_DESCRIPTOR_SET_LAYOUTS        (64)
 #define FFX_MAX_BINDLESS_DESCRIPTOR_COUNT (65536)
 
@@ -107,7 +112,7 @@ typedef struct BackendContext_VK {
 
         VkSampler               samplers[FFX_MAX_SAMPLERS];
         VkDescriptorSetLayout   descriptorSetLayout;
-        VkDescriptorSet         descriptorSets[FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME];
+        VkDescriptorSet         descriptorSets[FFX_MAX_QUEUED_FRAMES * PIPELINE_DESCRIPTOR_SETS_PER_FRAME];
         uint32_t                descriptorSetIndex;
         VkPipelineLayout        pipelineLayout;
         int32_t                 staticTextureSrvSet;
@@ -3462,7 +3467,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
 
     // allocate descriptor sets
     pPipelineLayout->descriptorSetIndex = 0;
-    for (uint32_t i = 0; i < (FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME); i++)
+    for (uint32_t i = 0; i < (FFX_MAX_QUEUED_FRAMES * PIPELINE_DESCRIPTOR_SETS_PER_FRAME); i++)
     {
         VkDescriptorSetAllocateInfo allocateInfo = {};
         allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -3731,7 +3736,7 @@ FfxErrorCode DestroyPipelineVK(FfxInterface* backendInterface, FfxPipelineState*
         }
 
         // Descriptor sets
-        for (uint32_t i = 0; i < FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME; i++) {
+        for (uint32_t i = 0; i < FFX_MAX_QUEUED_FRAMES * PIPELINE_DESCRIPTOR_SETS_PER_FRAME; i++) {
             backendContext->vkFunctionTable.vkFreeDescriptorSets(backendContext->device, backendContext->descriptorPool, 1, &pPipelineLayout->descriptorSets[i]);
             pPipelineLayout->descriptorSets[i] = VK_NULL_HANDLE;
         }
@@ -4021,7 +4026,7 @@ static FfxErrorCode executeGpuJobCompute(BackendContext_VK*    backendContext,
 
     // move to another descriptor set for the next compute render job so that we don't overwrite descriptors in-use
     ++pipelineLayout->descriptorSetIndex;
-    if (pipelineLayout->descriptorSetIndex >= (FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME))
+    if (pipelineLayout->descriptorSetIndex >= (FFX_MAX_QUEUED_FRAMES * PIPELINE_DESCRIPTOR_SETS_PER_FRAME))
         pipelineLayout->descriptorSetIndex = 0;
 
     return FFX_OK;

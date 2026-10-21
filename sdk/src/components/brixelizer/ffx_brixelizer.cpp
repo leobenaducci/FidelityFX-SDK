@@ -60,6 +60,9 @@ typedef struct FfxBrixelizerBakedUpdateDescription_Private {
     // vkfw patch: the mover cascade's jobs: its instances and its invalidations.
     uint32_t                            numMoverJobs;
     FfxBrixelizerRawJobDescription                 moverJobs[2 * FFX_BRIXELIZER_MAX_INSTANCES];
+    // vkfw patch: FfxBrixelizerUpdateDescription::extraLevelMask / extraStaticLevelMask, as baked (without the scheduled level).
+    uint32_t                            extraLevelMask;
+    uint32_t                            extraStaticLevelMask;
 } FfxBrixelizerBakedUpdateDescription_Private;
 
 FFX_STATIC_ASSERT(sizeof(FfxBrixelizerBakedUpdateDescription) == sizeof(FfxBrixelizerBakedUpdateDescription_Private));
@@ -71,6 +74,10 @@ typedef struct FfxBrixelizerCascadePrivate {
     uint32_t                 dynamicIndex;
     uint32_t                 mergedIndex;
     uint32_t                 moverIndex;    // vkfw patch
+    // vkfw patch: where the level's last scheduled update placed it, which its extra updates (extraLevelMask) keep.
+    uint32_t                 placed;
+    int32_t                  placedClipmapOffset[3];
+    float                    placedCascadeMin[3];
 } FfxBrixelizerCascadePrivate;
 
 typedef struct FfxBrixelizerInvalidation {
@@ -96,6 +103,13 @@ static bool instanceInCascade(const FfxBrixelizerInstance *instance, uint32_t ca
     return cascadeIndex >= instance->minCascade && cascadeIndex <= instance->maxCascade;
 }
 
+// vkfw patch: the source cascades of a level.
+enum FfxBrixelizerLevelSource {
+    FFX_BRIXELIZER_LEVEL_SOURCE_STATIC,
+    FFX_BRIXELIZER_LEVEL_SOURCE_MOVER,
+    FFX_BRIXELIZER_LEVEL_SOURCE_DYNAMIC,
+};
+
 typedef struct FfxBrixelizerScratchSpace {
     union {
         struct {
@@ -119,9 +133,140 @@ typedef struct FfxBrixelizerContext_Private {
     uint32_t                    instanceIndices[FFX_BRIXELIZER_MAX_INSTANCES];
     FfxBrixelizerInstance       instances[FFX_BRIXELIZER_MAX_INSTANCES];
     FfxBrixelizerScratchSpace   scratchSpace;
+    // vkfw patch: the jobs of one cascade of an extra level (extraLevelMask), built as each is updated (the raw update copies them out).
+    FfxBrixelizerRawJobDescription* levelJobs;
 } FfxBrixelizerContext_Private;
 
+// vkfw patch: the capacity of levelJobs: every instance, and every invalidation.
+#define FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY (2 * FFX_BRIXELIZER_MAX_INSTANCES)
+
 FFX_STATIC_ASSERT(sizeof(FfxBrixelizerContext) >= sizeof(FfxBrixelizerContext_Private));
+
+// vkfw patch: the jobs of one source cascade of a level, for an extra update (extraLevelMask), as the scheduled update's are made in
+// ffxBrixelizerBakeUpdate: the static cascade's instances and, consumed if consume is set, its pending invalidations; the mover cascade's
+// instances; the dynamic cascade's, and the movers at a level without a mover cascade.
+static uint32_t buildLevelJobs(FfxBrixelizerContext_Private* context, uint32_t level, FfxBrixelizerLevelSource source, FfxBrixelizerAABB cascadeAABB,
+                               FfxBrixelizerRawJobDescription* jobs, bool consume)
+{
+    const FfxBrixelizerCascadeFlag flags = context->cascades[level].flags;
+    uint32_t numJobs = 0;
+    const auto addInstance = [&](const FfxBrixelizerInstance *instance) {
+        if (numJobs >= FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY) return;
+        FfxBrixelizerRawJobDescription job = {};
+        ifor (3) {
+            job.aabbMin[i] = instance->aabb.min[i];
+            job.aabbMax[i] = instance->aabb.max[i];
+        }
+        job.instanceIdx = instance->id;
+        jobs[numJobs++] = job;
+    };
+
+    switch (source) {
+    case FFX_BRIXELIZER_LEVEL_SOURCE_STATIC: {
+        ifor (context->numStaticInstances) {
+            const FfxBrixelizerInstance *instance = &context->instances[i];
+            if (!instance->isMover && instanceInCascade(instance, level) && aabbsOverlap(instance->aabb, cascadeAABB))
+                addInstance(instance);
+        }
+        const uint32_t cascadeMask = 1u << level;
+        uint32_t curInvalidation = 0;
+        while (curInvalidation < context->numInvalidations) {
+            FfxBrixelizerInvalidation *invalidation = &context->invalidations[curInvalidation];
+            if (invalidation->cascades & cascadeMask) {
+                if (aabbsOverlap(invalidation->aabb, cascadeAABB) && numJobs < FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY) {
+                    FfxBrixelizerRawJobDescription job = {};
+                    ifor (3) {
+                        job.aabbMin[i] = invalidation->aabb.min[i];
+                        job.aabbMax[i] = invalidation->aabb.max[i];
+                    }
+                    job.flags = FFX_BRIXELIZER_RAW_JOB_FLAG_INVALIDATE;
+                    jobs[numJobs++] = job;
+                }
+                if (consume) {
+                    invalidation->cascades &= ~cascadeMask;
+                    if (!invalidation->cascades) {
+                        context->invalidations[curInvalidation] = context->invalidations[--context->numInvalidations];
+                        continue;
+                    }
+                }
+            }
+            ++curInvalidation;
+        }
+        break;
+    }
+    case FFX_BRIXELIZER_LEVEL_SOURCE_MOVER:
+        ifor (context->numStaticInstances) {
+            const FfxBrixelizerInstance *instance = &context->instances[i];
+            if (instance->isMover && instanceInCascade(instance, level) && aabbsOverlap(instance->aabb, cascadeAABB))
+                addInstance(instance);
+        }
+        break;
+    case FFX_BRIXELIZER_LEVEL_SOURCE_DYNAMIC:
+        for (uint32_t i = context->dynamicInstanceStartIndex; i < FFX_ARRAY_ELEMENTS(context->instances); ++i) {
+            if (instanceInCascade(&context->instances[i], level))
+                addInstance(&context->instances[i]);
+        }
+        if (!(flags & FFX_BRIXELIZER_CASCADE_MOVER)) {
+            ifor (context->numStaticInstances) {
+                const FfxBrixelizerInstance *instance = &context->instances[i];
+                if (instance->isMover && instanceInCascade(instance, level) && aabbsOverlap(instance->aabb, cascadeAABB))
+                    addInstance(instance);
+            }
+        }
+        break;
+    }
+    return numJobs;
+}
+
+// vkfw patch: an extra level's placement, as its last scheduled update left it.
+static FfxBrixelizerAABB placedCascadeAABB(const FfxBrixelizerCascadePrivate* cascade)
+{
+    FfxBrixelizerAABB aabb = {};
+    ifor (3) {
+        aabb.min[i] = cascade->placedCascadeMin[i];
+        aabb.max[i] = aabb.min[i] + cascade->voxelSize * (float)FFX_BRIXELIZER_CASCADE_RESOLUTION;
+    }
+    return aabb;
+}
+
+// vkfw patch: the cascade updates one ffxBrixelizerUpdate may make. The VK backend keeps a ring of descriptor sets a pipeline a frame
+// (PIPELINE_DESCRIPTOR_SETS_PER_FRAME, 24, in ffx_vk.cpp) and reuses one still in flight past that; every cascade update dispatches each
+// of the cascade passes once, and every merged level the AABB tree pass three times (eight levels at most: 24).
+#define FFX_BRIXELIZER_MAX_CASCADE_UPDATES_PER_UPDATE 24
+
+static uint32_t countSources(FfxBrixelizerCascadeFlag flags)
+{
+    return ((flags & FFX_BRIXELIZER_CASCADE_STATIC) ? 1u : 0u) + ((flags & FFX_BRIXELIZER_CASCADE_MOVER) ? 1u : 0u) + ((flags & FFX_BRIXELIZER_CASCADE_DYNAMIC) ? 1u : 0u);
+}
+
+// vkfw patch: the extra levels (and of them the static ones) this update can afford: their mover and dynamic cascades first, every level
+// that asks, then their static cascades, finest first, while FFX_BRIXELIZER_MAX_CASCADE_UPDATES_PER_UPDATE allows.
+static void extraLevels(const FfxBrixelizerContext_Private* context, uint32_t mask, uint32_t staticMask, uint32_t scheduledLevel,
+                        uint32_t* outLevels, uint32_t* outStaticLevels)
+{
+    uint32_t budget = FFX_BRIXELIZER_MAX_CASCADE_UPDATES_PER_UPDATE - countSources(context->cascades[scheduledLevel].flags);
+    uint32_t levels = 0, staticLevels = 0;
+    ifor (context->numCascades) {
+        const FfxBrixelizerCascadePrivate *level = &context->cascades[i];
+        if (!(mask & (1u << i)) || i == scheduledLevel || !level->placed)
+            continue;
+        const uint32_t cost = countSources(FfxBrixelizerCascadeFlag(level->flags & (FFX_BRIXELIZER_CASCADE_MOVER | FFX_BRIXELIZER_CASCADE_DYNAMIC)));
+        if (cost > budget)
+            continue;
+        budget -= cost;
+        levels |= 1u << i;
+    }
+    ifor (context->numCascades) {
+        const FfxBrixelizerCascadePrivate *level = &context->cascades[i];
+        if (!(staticMask & mask & (1u << i)) || i == scheduledLevel || !level->placed || !(level->flags & FFX_BRIXELIZER_CASCADE_STATIC) || budget == 0)
+            continue;
+        --budget;
+        levels |= 1u << i;
+        staticLevels |= 1u << i;
+    }
+    *outLevels = levels;
+    *outStaticLevels = staticLevels;
+}
 
 FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* desc, FfxBrixelizerContext* uncastOutContext)
 {
@@ -180,6 +325,10 @@ FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* d
     }
 
     outContext->numCascades = desc->numCascades;
+    outContext->levelJobs = (FfxBrixelizerRawJobDescription*)malloc(FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY * sizeof(FfxBrixelizerRawJobDescription));
+    if (!outContext->levelJobs) {
+        return FFX_ERROR_OUT_OF_MEMORY;
+    }
 
     return FFX_OK;
 }
@@ -192,6 +341,7 @@ FfxErrorCode ffxBrixelizerContextDestroy(FfxBrixelizerContext* uncastContext)
     if (result != FFX_OK) {
         return result;
     }
+    free(context->levelJobs);
     memset(context, 0, sizeof(*context));
     return FFX_OK;
 }
@@ -219,6 +369,16 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         cascadeUpdateDesc->clipmapOffset[i] = (int32_t)cascadeCenter;
         cascadeUpdateDesc->cascadeMin[i] = (cascadeCenter - (0.5f * (float)FFX_BRIXELIZER_CASCADE_RESOLUTION)) * cascadePrivate->voxelSize;
     }
+    // vkfw patch: the placement this level keeps until its next turn (its extra updates use it).
+    cascadePrivate->placed = 1;
+    ifor (3) {
+        cascadePrivate->placedClipmapOffset[i] = cascadeUpdateDesc->clipmapOffset[i];
+        cascadePrivate->placedCascadeMin[i]    = cascadeUpdateDesc->cascadeMin[i];
+    }
+    extraLevels(context, desc->extraLevelMask, desc->extraStaticLevelMask, cascadeIndex, &outDesc->extraLevelMask, &outDesc->extraStaticLevelMask);
+    if (desc->outExtraLevelMask)
+        *desc->outExtraLevelMask = outDesc->extraLevelMask;
+
     // XXX -- tmp just keep these values for now
     cascadeUpdateDesc->maxReferences = desc->maxReferences;
     cascadeUpdateDesc->maxBricksPerBake = desc->maxBricksPerBake;
@@ -370,7 +530,36 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         }
 
         size_t scratchSize = staticSize > dynamicSize ? staticSize : dynamicSize;
-        *desc->outScratchBufferSize = scratchSize > moverSize ? scratchSize : moverSize;
+        scratchSize = scratchSize > moverSize ? scratchSize : moverSize;
+
+        // vkfw patch: and the extra levels' updates, which run one after another on the same scratch.
+        ifor (context->numCascades) {
+            if (!(outDesc->extraLevelMask & (1u << i))) continue;
+            const FfxBrixelizerCascadePrivate *level = &context->cascades[i];
+            FfxBrixelizerRawCascadeUpdateDescription extraDesc = *cascadeUpdateDesc;
+            jfor (3) {
+                extraDesc.clipmapOffset[j] = level->placedClipmapOffset[j];
+                extraDesc.cascadeMin[j]    = level->placedCascadeMin[j];
+            }
+            const FfxBrixelizerAABB aabb = placedCascadeAABB(level);
+            const struct { FfxBrixelizerCascadeFlag flag; FfxBrixelizerLevelSource source; uint32_t index; uint32_t updateFlags; } sources[] = {
+                { FFX_BRIXELIZER_CASCADE_STATIC, FFX_BRIXELIZER_LEVEL_SOURCE_STATIC, level->staticIndex, FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_NONE },
+                { FFX_BRIXELIZER_CASCADE_MOVER, FFX_BRIXELIZER_LEVEL_SOURCE_MOVER, level->moverIndex, FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_RESET },
+                { FFX_BRIXELIZER_CASCADE_DYNAMIC, FFX_BRIXELIZER_LEVEL_SOURCE_DYNAMIC, level->dynamicIndex, FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_RESET },
+            };
+            for (const auto& source : sources) {
+                if (!(level->flags & source.flag)) continue;
+                if (source.source == FFX_BRIXELIZER_LEVEL_SOURCE_STATIC && !(outDesc->extraStaticLevelMask & (1u << i))) continue;
+                extraDesc.cascadeIndex = source.index;
+                extraDesc.numJobs      = buildLevelJobs(context, i, source.source, aabb, context->levelJobs, false);
+                extraDesc.jobs         = context->levelJobs;
+                extraDesc.flags        = source.updateFlags;
+                size_t size = 0;
+                FFX_VALIDATE(ffxBrixelizerRawContextGetScratchMemorySize(&context->context, &extraDesc, &size));
+                scratchSize = scratchSize > size ? scratchSize : size;
+            }
+        }
+        *desc->outScratchBufferSize = scratchSize;
     }
 
     return FFX_OK;
@@ -436,6 +625,43 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
     }
     ffxBrixelizerRawContextMergeCascades3(&context->context, staticCascadeIndex, moverCascadeIndex, dynamicCascadeIndex, mergedCascadeIndex);
     ffxBrixelizerRawContextBuildAABBTree(&context->context, mergedCascadeIndex);
+
+    // vkfw patch: the extra levels (extraLevelMask), at their own placement: their mover and dynamic cascades rebuilt, their static one too
+    // where it is asked for and has invalidations pending, then merged.
+    ifor (context->numCascades) {
+        if (!(desc->extraLevelMask & (1u << i))) continue;
+        const FfxBrixelizerCascadePrivate *level = &context->cascades[i];
+        FfxBrixelizerRawCascadeUpdateDescription extraDesc = desc->cascadeUpdateDesc;
+        jfor (3) {
+            extraDesc.clipmapOffset[j] = level->placedClipmapOffset[j];
+            extraDesc.cascadeMin[j]    = level->placedCascadeMin[j];
+        }
+        const FfxBrixelizerAABB aabb = placedCascadeAABB(level);
+
+        if ((level->flags & FFX_BRIXELIZER_CASCADE_STATIC) && (desc->extraStaticLevelMask & (1u << i))) {
+            extraDesc.cascadeIndex = level->staticIndex;
+            extraDesc.numJobs      = buildLevelJobs(context, i, FFX_BRIXELIZER_LEVEL_SOURCE_STATIC, aabb, context->levelJobs, true);
+            extraDesc.jobs         = context->levelJobs;
+            extraDesc.flags        = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_NONE;
+            ffxBrixelizerRawContextUpdateCascade(&context->context, &extraDesc);
+        }
+        if (level->flags & FFX_BRIXELIZER_CASCADE_MOVER) {
+            extraDesc.cascadeIndex = level->moverIndex;
+            extraDesc.numJobs      = buildLevelJobs(context, i, FFX_BRIXELIZER_LEVEL_SOURCE_MOVER, aabb, context->levelJobs, false);
+            extraDesc.jobs         = context->levelJobs;
+            extraDesc.flags        = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_RESET;
+            ffxBrixelizerRawContextUpdateCascade(&context->context, &extraDesc);
+        }
+        if (level->flags & FFX_BRIXELIZER_CASCADE_DYNAMIC) {
+            extraDesc.cascadeIndex = level->dynamicIndex;
+            extraDesc.numJobs      = buildLevelJobs(context, i, FFX_BRIXELIZER_LEVEL_SOURCE_DYNAMIC, aabb, context->levelJobs, false);
+            extraDesc.jobs         = context->levelJobs;
+            extraDesc.flags        = FFX_BRIXELIZER_CASCADE_UPDATE_FLAG_RESET;
+            ffxBrixelizerRawContextUpdateCascade(&context->context, &extraDesc);
+        }
+        ffxBrixelizerRawContextMergeCascades3(&context->context, level->staticIndex, level->moverIndex, level->dynamicIndex, level->mergedIndex);
+        ffxBrixelizerRawContextBuildAABBTree(&context->context, level->mergedIndex);
+    }
 
     ffxBrixelizerRawContextEnd(&context->context);
 
@@ -709,6 +935,18 @@ FfxErrorCode ffxBrixelizerGetContextInfo(FfxBrixelizerContext* uncastContext, Ff
     FfxBrixelizerContext_Private *context = (FfxBrixelizerContext_Private*)uncastContext;
 
     return ffxBrixelizerRawContextGetInfo(&context->context, contextInfo);
+}
+
+FfxErrorCode ffxBrixelizerGetPendingStaticInvalidationMask(FfxBrixelizerContext* uncastContext, uint32_t* outLevelMask)
+{
+    FFX_RETURN_ON_ERROR(uncastContext != NULL && outLevelMask != NULL, FFX_ERROR_INVALID_POINTER);
+    const FfxBrixelizerContext_Private *context = (const FfxBrixelizerContext_Private*)uncastContext;
+    uint32_t mask = 0;
+    ifor (context->numInvalidations) {
+        mask |= context->invalidations[i].cascades;
+    }
+    *outLevelMask = mask;
+    return FFX_OK;
 }
 
 FfxErrorCode ffxBrixelizerGetCascadeIndices(FfxBrixelizerContext* uncastContext, uint32_t level, uint32_t* staticIndex, uint32_t* moverIndex, uint32_t* dynamicIndex, uint32_t* mergedIndex)
