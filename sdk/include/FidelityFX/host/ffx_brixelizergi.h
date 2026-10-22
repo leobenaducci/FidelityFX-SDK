@@ -125,7 +125,7 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE = (1 << 2), ///< The seed fills the radiance cache too.
     FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC = (1 << 3), ///< A static brick in a mover's bounds keeps its voxel's slot: level L's static cascade is raw cascade L (ffxBrixelizerGetCascadeIndices' layout, with a static cascade at every level).
     FFX_BRIXELIZER_GI_CACHE_SEED_FINER = (1 << 4),   ///<A new brick is seeded first from the next finer cascade's bricks inside it (their SH averaged by sample count, its radiance from theirs where each texel falls), and only without any from the coarser one.
-    FFX_BRIXELIZER_GI_CACHE_STATS = (1 << 5),        ///< Run the statistics pass after the slot passes: the brick count and the sample histogram in slotCounters (FFX_BRIXELIZER_GI_SLOT_COUNTER_BRICKS, _HISTOGRAM). The other counters are kept either way.
+    FFX_BRIXELIZER_GI_CACHE_STATS = (1 << 5),        ///< Run the statistics pass after the slot passes: the brick count, the bricks with no lit radiance texel and the sample histogram in slotCounters (FFX_BRIXELIZER_GI_SLOT_COUNTER_BRICKS, _UNLIT, _HISTOGRAM). The other counters are kept either way.
     FFX_BRIXELIZER_GI_CACHE_EMPTY_ACCUMULATE = (1 << 6),        ///< The empty-brick list (emptyBricks) is never started over by the GI: it gathers every rebuild's empty bricks (a brick once a rebuild, so one on a level rebuilt twice is listed twice) until the application, having read it, zeroes its count.
 } FfxBrixelizerGICacheFlags;
 
@@ -171,26 +171,31 @@ typedef struct FfxBrixelizerGIEmptyBrick
     uint32_t padding;
 } FfxBrixelizerGIEmptyBrick;
 
-/// vkfw patch: what FfxBrixelizerGIDispatchDescription::cacheFeed holds, an entry each: 88 bytes, std430, no padding.
+/// vkfw patch: what FfxBrixelizerGIDispatchDescription::cacheFeed holds, an entry each: 96 bytes, std430, no padding.
 ///
 /// sh is the brick cache's own form (the irradiance SH Brixelizer GI keeps per brick, FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE's bricksSH):
 /// 9 L2 coefficients in FfxBrixelizerGISHGetCoefficients' basis and order (Y00; Y1-1 (y), Y10 (z), Y11 (x); Y2-2 (xy), Y2-1 (yz), Y20
 /// (3z^2 - 1), Y21 (xz), Y22 (x^2 - y^2)), of the radiance arriving at the brick (not convolved with a cosine), each as fp16x4 rgb plus an
 /// unused w, packed two halves to a uint32 (x | y << 16, z | w << 16). Radiance in the units the GI's other inputs use (pre-exposed the same
 /// way). samples is how many samples the estimate is worth: it weighs the entry against what the brick already holds.
+/// radiance (FFX_BRIXELIZER_GI_CACHE_FEED_RADIANCE) is the radiance the brick's surface sends out, what a ray that hits it sees (the radiance
+/// cache's own quantity: the screen's lit colour where the screen shows it), fp16x4 rgb plus an unused w packed the same way, for all 64 of
+/// the brick's radiance texels.
 typedef struct FfxBrixelizerGICacheFeedEntry
 {
     float    worldPosition[3];
     float    samples;
     uint32_t sh[18];
+    uint32_t radiance[2];
 } FfxBrixelizerGICacheFeedEntry;
 
 /// vkfw patch: how a cache feed entry meets the brick's own cache.
 typedef enum FfxBrixelizerGICacheFeedFlags
 {
     FFX_BRIXELIZER_GI_CACHE_FEED_BLEND      = 0,         ///< Blended in by sample count (the brick's and the entry's).
-    FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY = (1 << 0),  ///< Only into a brick whose irradiance has fewer samples than the entry: what the screen keeps lit is left alone.
+    FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY = (1 << 0),  ///< Only into a brick whose irradiance has fewer samples than the entry, and (RADIANCE) only into the radiance texels nothing has lit: what the screen keeps lit is left alone.
     FFX_BRIXELIZER_GI_CACHE_FEED_DIRECT     = (1 << 1),  ///< Into the direct-light SH too (the GI's direct term, which it otherwise takes only from the screen).
+    FFX_BRIXELIZER_GI_CACHE_FEED_RADIANCE   = (1 << 2),  ///< Into the brick's radiance texels too (the entry's radiance): a texel nothing has lit takes it, a lit one blends it in by sample count, the texel worth at least the entry (none under EMPTY_ONLY). A black entry is kept at 2^-14, so a dark surface reads as dark rather than unlit; an infinite or NaN one is dropped.
 } FfxBrixelizerGICacheFeedFlags;
 
 /// vkfw patch: a body that moved since a merged cascade's last bake: a voxel of it inside the bounds was, then, at the point the transform takes it to.

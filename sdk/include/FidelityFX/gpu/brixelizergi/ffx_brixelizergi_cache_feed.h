@@ -1,7 +1,7 @@
 // This file is part of the FidelityFX SDK.
 //
 // vkfw patch: the application's cache feed (FfxBrixelizerGIDispatchDescription::cacheFeed): its own estimate of the world cache, for the
-// bricks the screen never shows, written into the brick SH the GI keeps.
+// bricks the screen never shows, written into the brick SH the GI keeps and, FFX_BRIXELIZER_GI_CACHE_FEED_RADIANCE, its radiance texels.
 
 #ifndef FFX_BRIXELIZERGI_CACHE_FEED_H
 #define FFX_BRIXELIZERGI_CACHE_FEED_H
@@ -11,9 +11,12 @@
 #include "ffx_brixelizergi_common.h"
 #include "ffx_brixelizergi_probe_shading.h"
 
-#define FFX_BRIXELIZER_GI_CACHE_FEED_ENTRY_UINTS 22u
+#define FFX_BRIXELIZER_GI_CACHE_FEED_ENTRY_UINTS 24u
 #define FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY_FLAG 1u
 #define FFX_BRIXELIZER_GI_CACHE_FEED_DIRECT_FLAG 2u
+#define FFX_BRIXELIZER_GI_CACHE_FEED_RADIANCE_FLAG 4u
+// A fed radiance texel is kept at this or more: a zero texel is one nothing has lit (FfxBrixelizerGISampleRadianceTexels), not a dark one.
+#define FFX_BRIXELIZER_GI_CACHE_FEED_MIN_RADIANCE 6.103515625e-5
 
 // A brick map load with the descriptor index made wave-uniform by a sweep (as ffx_brixelizergi_cache_slots.h's): the lanes of a wave walk
 // the cascades to different depths, and an index that is not uniform faults the GPU.
@@ -65,15 +68,16 @@ void FfxBrixelizerGICacheFeed(FfxUInt32 tid)
     if (slot == FFX_BRIXELIZER_GI_INVALID_SLOT)
         return;
 
-    // The brick's own sample count is coefficient 0's .w (the GI blends its history by it).
-    const FfxFloat32 own = ffxUnpackF32x2(LoadBricksSH(slot * 9u)).w;
-    if ((GetCacheFeedFlags() & FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY_FLAG) != 0u && !(own < samples))
-        return;
+    // The brick's own sample count is coefficient 0's .w (the GI blends its history by it). EMPTY_ONLY keeps the SH of a brick with as many
+    // samples as the entry or more; its unlit radiance texels are still fed (below).
+    const FfxFloat32 own         = ffxUnpackF32x2(LoadBricksSH(slot * 9u)).w;
+    const FfxBoolean empty_only  = (GetCacheFeedFlags() & FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY_FLAG) != 0u;
+    const FfxBoolean feed_sh     = !empty_only || own < samples;
     const FfxFloat32 own_samples = isnan(own) ? FfxFloat32(0.0) : ffxMax(own, FfxFloat32(0.0));
     const FfxFloat32 t           = samples / (own_samples + samples);
     const FfxFloat32 total       = ffxMin(own_samples + samples, GetCacheFeedMaxSamples());
 
-    for (FfxUInt32 i = 0u; i < 9u; ++i)
+    for (FfxUInt32 i = 0u; i < 9u && feed_sh; ++i)
     {
         const FfxFloat32x4 fed = ffxUnpackF32x2(FfxUInt32x2(LoadCacheFeed(base + 4u + i * 2u), LoadCacheFeed(base + 5u + i * 2u)));
         FfxFloat32x4       sh  = ffxUnpackF32x2(LoadBricksSH(slot * 9u + i));
@@ -86,6 +90,29 @@ void FfxBrixelizerGICacheFeed(FfxUInt32 tid)
             direct.xyz = ffxLerp(direct.xyz, fed.xyz, t);
             direct.w   = total;
             StoreBricksDirectSH(slot * 9u + i, ffxFloat16x4ToUint32x2(FFX_MIN16_F4(direct)));
+        }
+    }
+
+    // The radiance texels: an unlit one takes the entry's radiance; a lit one (none under EMPTY_ONLY: the screen lit it) blends it in, worth
+    // at least the entry's samples, so the entry never takes more than half of what the screen lit (the brick's SH count says nothing of its
+    // texels: a brick cleared or seeded has none and lit texels all the same). A black entry is kept just above zero, dark rather than unlit.
+    if ((GetCacheFeedFlags() & FFX_BRIXELIZER_GI_CACHE_FEED_RADIANCE_FLAG) != 0u)
+    {
+        const FfxFloat32x3 fed = ffxUnpackF32x2(FfxUInt32x2(LoadCacheFeed(base + 22u), LoadCacheFeed(base + 23u))).xyz;
+        if (any(isnan(fed)) || any(isinf(fed)))
+            return;
+        const FfxFloat32x3 floor_radiance = FFX_BROADCAST_FLOAT32X3(FFX_BRIXELIZER_GI_CACHE_FEED_MIN_RADIANCE);
+        const FfxFloat32x3 radiance       = all(FFX_LESS_THAN(fed, floor_radiance)) ? floor_radiance : max(fed, FFX_BROADCAST_FLOAT32X3(0.0));
+        const FfxFloat32   lit_t          = samples / (ffxMax(own_samples, samples) + samples);
+        const FfxUInt32x3  offset         = FfxBrixelizerGetSDFAtlasOffset(slot) / 2;
+        for (FfxUInt32 texel = 0u; texel < 64u; ++texel)
+        {
+            const FfxUInt32x3  coord = offset + FfxBrixelizerUnflattenPOT(texel, 2);
+            const FfxFloat32x3 old   = LoadRadianceCache(coord);
+            const FfxBoolean   lit   = FfxBrixelizerGIRadianceTexelLit(old);
+            if (lit && empty_only)
+                continue;
+            StoreRadianceCache(coord, lit ? ffxLerp(old, radiance, lit_t) : radiance);
         }
     }
 }

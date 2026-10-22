@@ -228,7 +228,13 @@ FfxFloat32 FfxBrixelizerGIGetVoxelSize(FfxFloat32x3 world_pos, FfxUInt32 g_start
     return CINFO.voxel_size * ffxMax(FfxFloat32(1.0), r);
 }
 
-// vkfw patch: trilinear between a slot's 4^3 radiance texels (centres at uvw = k/3), over the lit ones only. A texel nothing has lit yet is
+// vkfw patch: a radiance texel is lit once anything wrote a non-zero radiance to it; zero (or not a number) is one nothing has reached.
+FfxBoolean FfxBrixelizerGIRadianceTexelLit(FfxFloat32x3 texel)
+{
+    return any(FFX_GREATER_THAN(texel, FFX_BROADCAST_FLOAT32X3(0.0))) && !any(isnan(texel));
+}
+
+// vkfw patch: trilinear between a slot's 4^3 radiance texels (centres at uvw = k/3), over the lit ones only.A texel nothing has lit yet is
 // zero, which means unknown, not dark: a filtered fetch averages it in as black, and the texels a surface moving through its voxel (a body
 // in motion, its bricks rebuilt at another place within the voxel each bake) has just reached are all such, so it showed as black specks.
 // Zero when none of the eight is lit: falling back to another level there leaks light into what is really dark.
@@ -245,7 +251,7 @@ FfxFloat32x3 FfxBrixelizerGISampleRadianceTexels(FfxUInt32 slot, FfxFloat32x3 uv
         const FfxUInt32x3  corner = FfxUInt32x3(c & 1u, (c >> 1u) & 1u, c >> 2u);
         const FfxFloat32x3 w3     = ffxLerp(FFX_BROADCAST_FLOAT32X3(1.0) - f, f, FfxFloat32x3(corner));
         const FfxFloat32x3 texel  = LoadRadianceCacheSRV(base + corner);
-        if (any(FFX_GREATER_THAN(texel, FFX_BROADCAST_FLOAT32X3(0.0))) && !any(isnan(texel)))
+        if (FfxBrixelizerGIRadianceTexelLit(texel))
         {
             const FfxFloat32 w = w3.x * w3.y * w3.z;
             radiance += texel * w;

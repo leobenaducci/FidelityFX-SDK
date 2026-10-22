@@ -39,6 +39,7 @@
 
 #define BRIXELIZER_GI_BIND_UAV_BRICKS_SH                        2000
 #define BRIXELIZER_GI_BIND_UAV_BRICKS_DIRECT_SH                 2001
+#define BRIXELIZER_GI_BIND_UAV_RADIANCE_CACHE                   2002
 
 #define BRIXELIZER_GI_BIND_CB_SDFGI                             3000
 #define BRIXELIZER_BIND_CB_CONTEXT_INFO                         3001

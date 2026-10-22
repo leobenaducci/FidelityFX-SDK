@@ -572,7 +572,7 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID)
     void SeedListStore(FfxUInt32 index, FfxUInt32 value) { g_rw_seed_list.data[index] = value; }
 #endif
 #if defined BRIXELIZER_GI_BIND_SRV_CACHE_FEED
-    // FfxBrixelizerGICacheFeedEntry, 22 uint32s.
+    // FfxBrixelizerGICacheFeedEntry, 24 uint32s.
     layout (set = 0, binding = BRIXELIZER_GI_BIND_SRV_CACHE_FEED, std430) readonly buffer BrixelizerGICacheFeed_t { FfxUInt32 data[]; } r_cache_feed;
     FfxUInt32 LoadCacheFeed(FfxUInt32 index) { return r_cache_feed.data[index]; }
 #endif

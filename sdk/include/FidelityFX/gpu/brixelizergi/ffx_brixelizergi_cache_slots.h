@@ -49,6 +49,7 @@
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS 33u      // the mover claim list's length (FFX_BRIXELIZER_GI_SLOTS_PASS_RESAMPLE)
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_RESAMPLED 11u         // slots a mover claim took that the resample turned or shifted
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDED_FINE 12u       // slots filled from the finer cascade's bricks inside them
+#define FFX_BRIXELIZER_GI_SLOT_COUNTER_UNLIT 13u             // bricks with a slot none of whose radiance texels is lit (the stats pass)
 
 // In the new-slot map between the claims and the allocation: the voxel's slot, which another brick claimed first (a body that moved into it). The
 // brick takes a new slot, copied from that one. Slots are below 2^18.
@@ -371,7 +372,7 @@ FfxFloat32x3 FfxBrixelizerGISlotsSampleRadiance(FfxUInt32 slot, FfxFloat32x3 uvw
         const FfxUInt32x3  corner = FfxUInt32x3(c & 1u, (c >> 1u) & 1u, c >> 2u);
         const FfxFloat32x3 w3     = ffxLerp(FFX_BROADCAST_FLOAT32X3(1.0) - f, f, FfxFloat32x3(corner));
         const FfxFloat32x3 texel  = LoadRadianceCache(base + corner);
-        if (any(FFX_GREATER_THAN(texel, FFX_BROADCAST_FLOAT32X3(0.0))))
+        if (FfxBrixelizerGIRadianceTexelLit(texel))
         {
             const FfxFloat32 w = w3.x * w3.y * w3.z;
             radiance += texel * w;
@@ -781,6 +782,17 @@ void FfxBrixelizerGISlotsStats(FfxUInt32 tid)
     // 0: none (or not a number); then one bucket a doubling, the last open-ended.
     const FfxUInt32 bucket = !(samples >= FfxFloat32(1.0)) ? 0u : min(1u + FfxUInt32(log2(samples)), 7u);
     SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_HISTOGRAM + bucket, 1u);
+
+    // The brick counts if none of its texels is lit (FfxBrixelizerGIRadianceTexelLit).
+    if (GetSlotConstants().stats_unlit != 0u)
+    {
+        const FfxUInt32x3 offset = FfxBrixelizerGetSDFAtlasOffset(slot) / 2;
+        FfxBoolean        lit    = false;
+        for (FfxUInt32 texel = 0u; texel < 64u && !lit; ++texel)
+            lit = FfxBrixelizerGIRadianceTexelLit(LoadRadianceCache(offset + FfxBrixelizerUnflattenPOT(texel, 2)));
+        if (!lit)
+            SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_UNLIT, 1u);
+    }
 }
 #endif // FFX_BRIXELIZER_GI_SLOTS_PASS_STATS
 

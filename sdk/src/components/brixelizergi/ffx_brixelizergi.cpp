@@ -1601,6 +1601,7 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         constants.empty_max             = bEmptyList ? pDispatchDescription->maxEmptyBricks : 0u;
         constants.empty_threshold       = settings.emptyBrickMaxSamples > 0.0f ? settings.emptyBrickMaxSamples : 1.0f;
         constants.empty_reset           = bEmptyList && bFirstLevel && !(settings.flags & FFX_BRIXELIZER_GI_CACHE_EMPTY_ACCUMULATE) ? 1u : 0u;
+        constants.stats_unlit           = (settings.flags & FFX_BRIXELIZER_GI_CACHE_STATS) ? 1u : 0u;
         bFirstLevel                     = false;
 
         // This level's movers: each transform is from the last bake of the levels its mask names.

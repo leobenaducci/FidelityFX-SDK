@@ -143,6 +143,11 @@ struct FfxBrixelizerGISlotConstants
     FfxFloat32   mover_padding;          // voxels past a mover's bounds its bricks are looked for in (FfxBrixelizerGICacheSettings::moverPaddingVoxels)
     FfxUInt32    park_bakes;             // rebuilds a voxel without a brick keeps its slot for (FfxBrixelizerGICacheSettings::parkBakes)
 
+    FfxUInt32    stats_unlit;            // the stats pass counts the bricks with no lit radiance texel (FFX_BRIXELIZER_GI_CACHE_STATS)
+    FfxUInt32    _padding0;
+    FfxUInt32    _padding1;
+    FfxUInt32    _padding2;
+
     FfxBrixelizerGISlotMover movers[FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS];
 };
 
