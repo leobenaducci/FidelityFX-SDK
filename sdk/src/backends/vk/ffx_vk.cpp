@@ -76,6 +76,24 @@ static VkDeviceContext sVkDeviceContext = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_N
 // Constant buffer allocation callback
 static FfxConstantBufferAllocator s_fpConstantAllocator = nullptr;
 
+// vkfw patch: descriptor buffer mode (ffxSetDescriptorBufferModeVK).
+static bool                              s_bWantDescriptorBuffers = false;
+static bool                              s_bDescriptorBuffersActive = false;
+static FfxDescriptorBufferRestoreFuncVK  s_fpDescriptorBufferRestore = nullptr;
+static void*                             s_pDescriptorBufferRestoreUser = nullptr;
+
+FFX_API void ffxSetDescriptorBufferModeVK(bool enable, FfxDescriptorBufferRestoreFuncVK restore, void* userData)
+{
+    s_bWantDescriptorBuffers       = enable;
+    s_fpDescriptorBufferRestore    = restore;
+    s_pDescriptorBufferRestoreUser = userData;
+}
+
+FFX_API bool ffxIsDescriptorBufferModeVK()
+{
+    return s_bDescriptorBuffersActive;
+}
+
 // Offset the binding of samplers to avoid collisions
 constexpr uint32_t SAMPLER_BINDING_SHIFT = 1000;
 
@@ -119,6 +137,13 @@ typedef struct BackendContext_VK {
         int32_t                 staticBufferSrvSet;
         int32_t                 staticTextureUavSet;
         int32_t                 staticBufferUavSet;
+        // vkfw patch, descriptor buffer mode: set 0's size and binding offsets in the buffer, and its template: every binding's null
+        // descriptor and the immutable samplers, copied into a pass's slot before its own descriptors are written over it.
+        VkDeviceSize            dbSetSize;
+        uint32_t                dbBindingCount;
+        uint32_t                dbBindings[MAX_DESCRIPTOR_SET_LAYOUTS];
+        VkDeviceSize            dbBindingOffsets[MAX_DESCRIPTOR_SET_LAYOUTS];
+        uint8_t*                dbTemplate;
     } PipelineLayout;
 
     typedef struct VKFunctionTable
@@ -160,6 +185,13 @@ typedef struct BackendContext_VK {
         PFN_vkFlushMappedMemoryRanges           vkFlushMappedMemoryRanges = 0;
         PFN_vkCmdPipelineBarrier                vkCmdPipelineBarrier = 0;
         PFN_vkCmdBindPipeline                   vkCmdBindPipeline = 0;
+        // vkfw patch: VK_EXT_descriptor_buffer
+        PFN_vkGetDescriptorSetLayoutSizeEXT          vkGetDescriptorSetLayoutSizeEXT = 0;
+        PFN_vkGetDescriptorSetLayoutBindingOffsetEXT vkGetDescriptorSetLayoutBindingOffsetEXT = 0;
+        PFN_vkGetDescriptorEXT                       vkGetDescriptorEXT = 0;
+        PFN_vkCmdBindDescriptorBuffersEXT            vkCmdBindDescriptorBuffersEXT = 0;
+        PFN_vkCmdSetDescriptorBufferOffsetsEXT       vkCmdSetDescriptorBufferOffsetsEXT = 0;
+        PFN_vkGetBufferDeviceAddress                 vkGetBufferDeviceAddress = 0;
         PFN_vkCmdBindDescriptorSets             vkCmdBindDescriptorSets = 0;
         PFN_vkCmdDispatch                       vkCmdDispatch = 0;
         PFN_vkCmdDispatchIndirect               vkCmdDispatchIndirect = 0;
@@ -234,6 +266,11 @@ typedef struct BackendContext_VK {
         VkDescriptorSet       bindlessBufferSrvDescriptorSet;
         VkDescriptorSet       bindlessTextureUavDescriptorSet;
         VkDescriptorSet       bindlessBufferUavDescriptorSet;
+        // vkfw patch, descriptor buffer mode: each bindless set's place in the persistent part of the buffer (texture srv, buffer srv,
+        // texture uav, buffer uav), its size and its binding 0's offset; kept with the slot for the next effect on it.
+        VkDeviceSize          bindlessDbOffset[4];
+        VkDeviceSize          bindlessDbCapacity[4];
+        VkDeviceSize          bindlessDbBindingOffset[4];
 
         // Pipeline layout
         uint32_t              nextPipelineLayout;
@@ -257,6 +294,20 @@ typedef struct BackendContext_VK {
     VkDeviceMemory        uniformBufferMemory = VK_NULL_HANDLE;
     VkMemoryPropertyFlags uniformBufferMemoryProperties;
     VkDeviceSize          uniformBufferAlignment = 0;
+
+    // vkfw patch, descriptor buffer mode: the buffer (a persistent part for the bindless sets, then a ring for the passes' sets), the
+    // device's descriptor sizes, and whether this dispatch has bound it.
+    bool                  useDescriptorBuffers  = false;
+    VkPhysicalDeviceDescriptorBufferPropertiesEXT dbProperties = {};
+    VkBuffer              dbBuffer              = VK_NULL_HANDLE;
+    VkDeviceMemory        dbMemory              = VK_NULL_HANDLE;
+    uint8_t*              dbMapped              = nullptr;
+    VkDeviceAddress       dbAddress             = 0;
+    VkDeviceSize          dbPersistentSize      = 0;
+    VkDeviceSize          dbPersistentUsed      = 0;
+    VkDeviceSize          dbRingSize            = 0;
+    VkDeviceSize          dbRingOffset          = 0;
+    bool                  dbBound               = false;
     void*                 uniformBufferMem       = nullptr;
     VkBuffer              uniformBuffer          = VK_NULL_HANDLE;
     VkDeviceSize          uniformBufferSize      = 0;
@@ -941,10 +992,15 @@ FfxResourceDescription ffxGetImageResourceDescriptionVK(const VkImage           
     return resourceDescription;
 }
 
-FfxErrorCode allocateDeviceMemory(BackendContext_VK* backendContext, VkMemoryRequirements memRequirements, VkMemoryPropertyFlags requiredMemoryProperties, BackendContext_VK::Resource* backendResource)
+FfxErrorCode allocateDeviceMemory(BackendContext_VK* backendContext, VkMemoryRequirements memRequirements, VkMemoryPropertyFlags requiredMemoryProperties, BackendContext_VK::Resource* backendResource,
+                                  bool bDeviceAddress = false)
 {
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    // vkfw patch: a buffer whose descriptors are addresses (descriptor buffer mode).
+    VkMemoryAllocateFlagsInfo flagsInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+    if (bDeviceAddress)
+        allocInfo.pNext = &flagsInfo;
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = findMemoryTypeIndex(backendContext->physicalDevice, memRequirements, requiredMemoryProperties, backendResource->memoryProperties);
 
@@ -1289,6 +1345,8 @@ FfxConstantAllocation BackendContext_VK::FallbackConstantAllocator(void* data, F
         bufferInfo.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size               = static_cast<VkDeviceSize>(uniformBufferSize);
         bufferInfo.usage              = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (useDescriptorBuffers)
+            bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;  // vkfw patch
         bufferInfo.sharingMode        = VK_SHARING_MODE_EXCLUSIVE;
 
         VkResult res = vkFunctionTable.vkCreateBuffer(device, &bufferInfo, NULL, &uniformBuffer);
@@ -1308,6 +1366,9 @@ FfxConstantAllocation BackendContext_VK::FallbackConstantAllocator(void* data, F
 
             allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocInfo.allocationSize  = uniformBufferSize;
+            static VkMemoryAllocateFlagsInfo s_uniformFlags = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+            if (useDescriptorBuffers)
+                allocInfo.pNext = &s_uniformFlags;  // vkfw patch
             allocInfo.memoryTypeIndex = findMemoryTypeIndex(physicalDevice, memRequirements, requiredMemoryProperties, uniformBufferMemoryProperties);
 
             if (allocInfo.memoryTypeIndex == UINT32_MAX)
@@ -1371,6 +1432,121 @@ FfxConstantAllocation BackendContext_VK::FallbackConstantAllocator(void* data, F
     }
 
     return allocation;
+}
+
+// vkfw patch, descriptor buffer mode: a descriptor's size, one written into the buffer (a null one where there is no resource: robustness2's
+// nullDescriptor), and space in the persistent part and the ring.
+static size_t dbDescriptorSize(const BackendContext_VK* backendContext, VkDescriptorType type)
+{
+    switch (type)
+    {
+    case VK_DESCRIPTOR_TYPE_SAMPLER:        return backendContext->dbProperties.samplerDescriptorSize;
+    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:  return backendContext->dbProperties.sampledImageDescriptorSize;
+    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:  return backendContext->dbProperties.storageImageDescriptorSize;
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return backendContext->dbProperties.uniformBufferDescriptorSize;
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: return backendContext->dbProperties.storageBufferDescriptorSize;
+    default:                                return 0;
+    }
+}
+
+static void dbGetDescriptor(BackendContext_VK* backendContext, VkDescriptorType type, const VkDescriptorImageInfo* image, VkBuffer buffer, VkDeviceSize offset,
+                            VkDeviceSize range, VkSampler sampler, uint8_t* destination)
+{
+    VkDescriptorGetInfoEXT     info    = {VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+    VkDescriptorAddressInfoEXT address = {VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
+    info.type = type;
+    switch (type)
+    {
+    case VK_DESCRIPTOR_TYPE_SAMPLER:
+        info.data.pSampler = &sampler;
+        break;
+    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+        info.data.pSampledImage = (image && image->imageView != VK_NULL_HANDLE) ? image : nullptr;
+        break;
+    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+        info.data.pStorageImage = (image && image->imageView != VK_NULL_HANDLE) ? image : nullptr;
+        break;
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        if (buffer != VK_NULL_HANDLE)
+        {
+            const VkBufferDeviceAddressInfo bufferAddress = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, nullptr, buffer};
+            address.address = backendContext->vkFunctionTable.vkGetBufferDeviceAddress(backendContext->device, &bufferAddress) + offset;
+            address.range   = range;
+        }
+        if (type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            info.data.pUniformBuffer = buffer != VK_NULL_HANDLE ? &address : nullptr;
+        else
+            info.data.pStorageBuffer = buffer != VK_NULL_HANDLE ? &address : nullptr;
+        break;
+    default:
+        return;
+    }
+    backendContext->vkFunctionTable.vkGetDescriptorEXT(backendContext->device, &info, dbDescriptorSize(backendContext, type), destination);
+}
+
+static void dbWriteDescriptor(BackendContext_VK* backendContext, const VkWriteDescriptorSet& write, uint8_t* bindingBase)
+{
+    const size_t stride = dbDescriptorSize(backendContext, write.descriptorType);
+    for (uint32_t i = 0; i < write.descriptorCount; ++i)
+    {
+        uint8_t* destination = bindingBase + (write.dstArrayElement + i) * stride;
+        if (write.pBufferInfo)
+            dbGetDescriptor(backendContext, write.descriptorType, nullptr, write.pBufferInfo[i].buffer, write.pBufferInfo[i].offset, write.pBufferInfo[i].range,
+                            VK_NULL_HANDLE, destination);
+        else if (write.pImageInfo)
+            dbGetDescriptor(backendContext, write.descriptorType, &write.pImageInfo[i], VK_NULL_HANDLE, 0, 0, write.pImageInfo[i].sampler, destination);
+    }
+}
+
+static VkDeviceSize dbAllocatePersistent(BackendContext_VK* backendContext, VkDeviceSize size)
+{
+    const VkDeviceSize offset = FFX_ALIGN_UP(backendContext->dbPersistentUsed, backendContext->dbProperties.descriptorBufferOffsetAlignment);
+    if (offset + size > backendContext->dbPersistentSize)
+        return VK_WHOLE_SIZE;
+    backendContext->dbPersistentUsed = offset + size;
+    return offset;
+}
+
+static VkDeviceSize dbAllocateRing(BackendContext_VK* backendContext, VkDeviceSize size)
+{
+    VkDeviceSize offset = FFX_ALIGN_UP(backendContext->dbRingOffset, backendContext->dbProperties.descriptorBufferOffsetAlignment);
+    if (offset + size > backendContext->dbRingSize)
+        offset = 0;
+    backendContext->dbRingOffset = offset + size;
+    return backendContext->dbPersistentSize + offset;
+}
+
+// vkfw patch, descriptor buffer mode: a bindless set's place (kept with the effect slot, grown if the next effect on it needs more), filled
+// with null descriptors.
+static bool dbCreateBindless(BackendContext_VK* backendContext, BackendContext_VK::EffectContext& effectContext, uint32_t which, VkDescriptorSetLayout layout,
+                             VkDescriptorType type, uint32_t count)
+{
+    VkDeviceSize size = 0;
+    backendContext->vkFunctionTable.vkGetDescriptorSetLayoutSizeEXT(backendContext->device, layout, &size);
+    backendContext->vkFunctionTable.vkGetDescriptorSetLayoutBindingOffsetEXT(backendContext->device, layout, 0, &effectContext.bindlessDbBindingOffset[which]);
+    if (effectContext.bindlessDbCapacity[which] < size)
+    {
+        const VkDeviceSize offset = dbAllocatePersistent(backendContext, size);
+        if (offset == VK_WHOLE_SIZE)
+            return false;
+        effectContext.bindlessDbOffset[which]   = offset;
+        effectContext.bindlessDbCapacity[which] = size;
+    }
+    uint8_t*     base   = backendContext->dbMapped + effectContext.bindlessDbOffset[which] + effectContext.bindlessDbBindingOffset[which];
+    const size_t stride = dbDescriptorSize(backendContext, type);
+    for (uint32_t i = 0; i < count; ++i)
+        dbGetDescriptor(backendContext, type, nullptr, VK_NULL_HANDLE, 0, 0, VK_NULL_HANDLE, base + i * stride);
+    return true;
+}
+
+// vkfw patch: a static (bindless) resource's descriptor: written into its set, or in descriptor buffer mode into the set's place in the buffer.
+static void updateBindlessDescriptor(BackendContext_VK* backendContext, BackendContext_VK::EffectContext& effectContext, uint32_t which, const VkWriteDescriptorSet& write)
+{
+    if (backendContext->useDescriptorBuffers)
+        dbWriteDescriptor(backendContext, write, backendContext->dbMapped + effectContext.bindlessDbOffset[which] + effectContext.bindlessDbBindingOffset[which]);
+    else
+        backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, 1, &write, 0, nullptr);
 }
 
 void resetBackendContext(BackendContext_VK* backendContext)
@@ -1527,6 +1703,12 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
         backendContext->vkFunctionTable.vkUpdateDescriptorSets = (PFN_vkUpdateDescriptorSets)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkUpdateDescriptorSets");
         backendContext->vkFunctionTable.vkCmdPipelineBarrier = (PFN_vkCmdPipelineBarrier)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkCmdPipelineBarrier");
         backendContext->vkFunctionTable.vkCmdBindPipeline = (PFN_vkCmdBindPipeline)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkCmdBindPipeline");
+        backendContext->vkFunctionTable.vkGetDescriptorSetLayoutSizeEXT = (PFN_vkGetDescriptorSetLayoutSizeEXT)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkGetDescriptorSetLayoutSizeEXT");
+        backendContext->vkFunctionTable.vkGetDescriptorSetLayoutBindingOffsetEXT = (PFN_vkGetDescriptorSetLayoutBindingOffsetEXT)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkGetDescriptorSetLayoutBindingOffsetEXT");
+        backendContext->vkFunctionTable.vkGetDescriptorEXT = (PFN_vkGetDescriptorEXT)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkGetDescriptorEXT");
+        backendContext->vkFunctionTable.vkCmdBindDescriptorBuffersEXT = (PFN_vkCmdBindDescriptorBuffersEXT)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkCmdBindDescriptorBuffersEXT");
+        backendContext->vkFunctionTable.vkCmdSetDescriptorBufferOffsetsEXT = (PFN_vkCmdSetDescriptorBufferOffsetsEXT)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkCmdSetDescriptorBufferOffsetsEXT");
+        backendContext->vkFunctionTable.vkGetBufferDeviceAddress = (PFN_vkGetBufferDeviceAddress)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkGetBufferDeviceAddress");
         backendContext->vkFunctionTable.vkCmdBindDescriptorSets = (PFN_vkCmdBindDescriptorSets)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkCmdBindDescriptorSets");
         backendContext->vkFunctionTable.vkCmdDispatch = (PFN_vkCmdDispatch)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkCmdDispatch");
         backendContext->vkFunctionTable.vkCmdDispatchIndirect = (PFN_vkCmdDispatchIndirect)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkCmdDispatchIndirect");
@@ -1572,6 +1754,61 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
         // set bindless resource view to base
         backendContext->bindlessBase = (backendContext->maxEffectContexts * FFX_MAX_QUEUED_FRAMES * FFX_MAX_RESOURCE_COUNT * 2);
 
+        // vkfw patch: descriptor buffer mode (ffxSetDescriptorBufferModeVK): its properties, and one host-visible buffer, 8 MB for the
+        // bindless sets and a 24 MB ring for the passes' sets (a pass's set is a few hundred bytes; a frame's, well under 1 MB).
+        backendContext->useDescriptorBuffers = false;
+        if (s_bWantDescriptorBuffers && backendContext->vkFunctionTable.vkGetDescriptorEXT && backendContext->vkFunctionTable.vkCmdBindDescriptorBuffersEXT &&
+            backendContext->vkFunctionTable.vkCmdSetDescriptorBufferOffsetsEXT && backendContext->vkFunctionTable.vkGetDescriptorSetLayoutSizeEXT &&
+            backendContext->vkFunctionTable.vkGetDescriptorSetLayoutBindingOffsetEXT && backendContext->vkFunctionTable.vkGetBufferDeviceAddress)
+        {
+            // The device must support both (the application enables them): null descriptors fill every binding a pass leaves unwritten.
+            VkPhysicalDeviceRobustness2FeaturesEXT       robustness2      = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+            VkPhysicalDeviceDescriptorBufferFeaturesEXT  descriptorBuffer = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT, &robustness2};
+            VkPhysicalDeviceFeatures2                    features2        = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &descriptorBuffer};
+            vkGetPhysicalDeviceFeatures2(backendContext->physicalDevice, &features2);
+            if (!robustness2.nullDescriptor || !descriptorBuffer.descriptorBuffer)
+                goto descriptorBuffersDone;
+
+            backendContext->dbProperties            = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT};
+            VkPhysicalDeviceProperties2 properties2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties2.pNext                       = &backendContext->dbProperties;
+            vkGetPhysicalDeviceProperties2(backendContext->physicalDevice, &properties2);
+
+            backendContext->dbPersistentSize = 8u << 20;
+            backendContext->dbRingSize       = 24u << 20;
+            VkBufferCreateInfo dbBufferInfo  = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            dbBufferInfo.size                = backendContext->dbPersistentSize + backendContext->dbRingSize;
+            dbBufferInfo.usage               = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            dbBufferInfo.sharingMode         = VK_SHARING_MODE_EXCLUSIVE;
+            if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &dbBufferInfo, nullptr, &backendContext->dbBuffer) == VK_SUCCESS)
+            {
+                VkMemoryRequirements dbRequirements = {};
+                backendContext->vkFunctionTable.vkGetBufferMemoryRequirements(backendContext->device, backendContext->dbBuffer, &dbRequirements);
+                VkMemoryPropertyFlags dbMemoryProperties = 0;
+                uint32_t dbMemoryType = findMemoryTypeIndex(backendContext->physicalDevice, dbRequirements,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dbMemoryProperties);
+                if (dbMemoryType == UINT32_MAX)
+                    dbMemoryType = findMemoryTypeIndex(backendContext->physicalDevice, dbRequirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                                       dbMemoryProperties);
+                VkMemoryAllocateFlagsInfo dbFlags = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+                VkMemoryAllocateInfo      dbAlloc = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &dbFlags, dbRequirements.size, dbMemoryType};
+                if (dbMemoryType != UINT32_MAX &&
+                    backendContext->vkFunctionTable.vkAllocateMemory(backendContext->device, &dbAlloc, nullptr, &backendContext->dbMemory) == VK_SUCCESS &&
+                    backendContext->vkFunctionTable.vkBindBufferMemory(backendContext->device, backendContext->dbBuffer, backendContext->dbMemory, 0) == VK_SUCCESS &&
+                    backendContext->vkFunctionTable.vkMapMemory(backendContext->device, backendContext->dbMemory, 0, dbBufferInfo.size, 0, (void**)&backendContext->dbMapped) == VK_SUCCESS)
+                {
+                    const VkBufferDeviceAddressInfo dbAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, nullptr, backendContext->dbBuffer};
+                    backendContext->dbAddress            = backendContext->vkFunctionTable.vkGetBufferDeviceAddress(backendContext->device, &dbAddressInfo);
+                    backendContext->dbPersistentUsed     = 0;
+                    backendContext->dbRingOffset         = 0;
+                    backendContext->useDescriptorBuffers = backendContext->dbAddress != 0;
+                }
+            }
+        }
+descriptorBuffersDone:
+        s_bDescriptorBuffersActive = backendContext->useDescriptorBuffers;
+
         // allocate dynamic uniform buffer
         {
             // get alignment
@@ -1586,6 +1823,8 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
             bufferInfo.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             bufferInfo.size               = static_cast<VkDeviceSize>(backendContext->uniformBufferSize);
             bufferInfo.usage              = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            if (backendContext->useDescriptorBuffers)
+                bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;  // vkfw patch: its descriptors are addresses
             bufferInfo.sharingMode        = VK_SHARING_MODE_EXCLUSIVE;
 
             if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &bufferInfo, NULL, &backendContext->uniformBuffer) != VK_SUCCESS)
@@ -1605,6 +1844,9 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
             VkMemoryAllocateInfo allocInfo{};
             allocInfo.sType          = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocInfo.allocationSize = backendContext->uniformBufferSize;
+            VkMemoryAllocateFlagsInfo uniformFlags = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+            if (backendContext->useDescriptorBuffers)
+                allocInfo.pNext = &uniformFlags;
             allocInfo.memoryTypeIndex =
                 findMemoryTypeIndex(backendContext->physicalDevice, memRequirements, requiredMemoryProperties, backendContext->uniformBufferMemoryProperties);
 
@@ -1861,6 +2103,12 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
+                    // vkfw patch: a descriptor buffer set in descriptor buffer mode (no binding flags: an unwritten descriptor there is a null one).
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        layoutInfo.pNext = nullptr;
+                        layoutInfo.flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+                    }
                     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(
                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessTextureSrvDescriptorSetLayout) != VK_SUCCESS)
                     {
@@ -1875,8 +2123,15 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     setAllocateInfo.descriptorSetCount          = 1;
                     setAllocateInfo.pSetLayouts                 = &effectContext.bindlessTextureSrvDescriptorSetLayout;
 
-                    backendContext->vkFunctionTable.vkAllocateDescriptorSets(
-                        backendContext->device, &setAllocateInfo, &effectContext.bindlessTextureSrvDescriptorSet);
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        effectContext.bindlessTextureSrvDescriptorSet = VK_NULL_HANDLE;
+                        if (!dbCreateBindless(backendContext, effectContext, 0, effectContext.bindlessTextureSrvDescriptorSetLayout, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, bindlessConfig->maxTextureSrvs))
+                            return FFX_ERROR_OUT_OF_MEMORY;
+                    }
+                    else
+                        backendContext->vkFunctionTable.vkAllocateDescriptorSets(
+                            backendContext->device, &setAllocateInfo, &effectContext.bindlessTextureSrvDescriptorSet);
                 }
 
                 // create the descriptor layout for bindless buffer srv buffers
@@ -1899,6 +2154,12 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
+                    // vkfw patch: a descriptor buffer set in descriptor buffer mode (no binding flags: an unwritten descriptor there is a null one).
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        layoutInfo.pNext = nullptr;
+                        layoutInfo.flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+                    }
                     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(
                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessBufferSrvDescriptorSetLayout) != VK_SUCCESS)
                     {
@@ -1912,8 +2173,15 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     setAllocateInfo.descriptorSetCount          = 1;
                     setAllocateInfo.pSetLayouts                 = &effectContext.bindlessBufferSrvDescriptorSetLayout;
 
-                    backendContext->vkFunctionTable.vkAllocateDescriptorSets(
-                        backendContext->device, &setAllocateInfo, &effectContext.bindlessBufferSrvDescriptorSet);
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        effectContext.bindlessBufferSrvDescriptorSet = VK_NULL_HANDLE;
+                        if (!dbCreateBindless(backendContext, effectContext, 1, effectContext.bindlessBufferSrvDescriptorSetLayout, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bindlessConfig->maxBufferSrvs))
+                            return FFX_ERROR_OUT_OF_MEMORY;
+                    }
+                    else
+                        backendContext->vkFunctionTable.vkAllocateDescriptorSets(
+                            backendContext->device, &setAllocateInfo, &effectContext.bindlessBufferSrvDescriptorSet);
                 }
 
                 // create the descriptor layout for bindless texture uav buffers
@@ -1936,6 +2204,12 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
+                    // vkfw patch: a descriptor buffer set in descriptor buffer mode (no binding flags: an unwritten descriptor there is a null one).
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        layoutInfo.pNext = nullptr;
+                        layoutInfo.flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+                    }
                     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(
                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessTextureUavDescriptorSetLayout) != VK_SUCCESS)
                     {
@@ -1949,8 +2223,15 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     setAllocateInfo.descriptorSetCount          = 1;
                     setAllocateInfo.pSetLayouts                 = &effectContext.bindlessTextureUavDescriptorSetLayout;
 
-                    backendContext->vkFunctionTable.vkAllocateDescriptorSets(
-                        backendContext->device, &setAllocateInfo, &effectContext.bindlessTextureUavDescriptorSet);
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        effectContext.bindlessTextureUavDescriptorSet = VK_NULL_HANDLE;
+                        if (!dbCreateBindless(backendContext, effectContext, 2, effectContext.bindlessTextureUavDescriptorSetLayout, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, bindlessConfig->maxTextureUavs))
+                            return FFX_ERROR_OUT_OF_MEMORY;
+                    }
+                    else
+                        backendContext->vkFunctionTable.vkAllocateDescriptorSets(
+                            backendContext->device, &setAllocateInfo, &effectContext.bindlessTextureUavDescriptorSet);
                 }
 
                 // create the descriptor layout for bindless buffer uav buffers
@@ -1973,6 +2254,12 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     layoutInfo.bindingCount                    = 1;
                     layoutInfo.pBindings                       = &binding;
 
+                    // vkfw patch: a descriptor buffer set in descriptor buffer mode (no binding flags: an unwritten descriptor there is a null one).
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        layoutInfo.pNext = nullptr;
+                        layoutInfo.flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+                    }
                     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(
                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessBufferUavDescriptorSetLayout) != VK_SUCCESS)
                     {
@@ -1986,8 +2273,15 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
                     setAllocateInfo.descriptorSetCount          = 1;
                     setAllocateInfo.pSetLayouts                 = &effectContext.bindlessBufferUavDescriptorSetLayout;
 
-                    backendContext->vkFunctionTable.vkAllocateDescriptorSets(
-                        backendContext->device, &setAllocateInfo, &effectContext.bindlessBufferUavDescriptorSet);
+                    if (backendContext->useDescriptorBuffers)
+                    {
+                        effectContext.bindlessBufferUavDescriptorSet = VK_NULL_HANDLE;
+                        if (!dbCreateBindless(backendContext, effectContext, 3, effectContext.bindlessBufferUavDescriptorSetLayout, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bindlessConfig->maxBufferUavs))
+                            return FFX_ERROR_OUT_OF_MEMORY;
+                    }
+                    else
+                        backendContext->vkFunctionTable.vkAllocateDescriptorSets(
+                            backendContext->device, &setAllocateInfo, &effectContext.bindlessBufferUavDescriptorSet);
                 }
             }
             else
@@ -2212,6 +2506,16 @@ FfxErrorCode DestroyBackendContextVK(FfxInterface* backendInterface, FfxUInt32 e
         backendContext->vkFunctionTable.vkDestroyDescriptorPool(backendContext->device, backendContext->descriptorPool, VK_NULL_HANDLE);
         backendContext->descriptorPool = VK_NULL_HANDLE;
 
+        // vkfw patch: the descriptor buffer
+        if (backendContext->dbMemory != VK_NULL_HANDLE)
+        {
+            backendContext->vkFunctionTable.vkUnmapMemory(backendContext->device, backendContext->dbMemory);
+            backendContext->vkFunctionTable.vkFreeMemory(backendContext->device, backendContext->dbMemory, VK_NULL_HANDLE);
+        }
+        if (backendContext->dbBuffer != VK_NULL_HANDLE)
+            backendContext->vkFunctionTable.vkDestroyBuffer(backendContext->device, backendContext->dbBuffer, VK_NULL_HANDLE);
+        s_bDescriptorBuffersActive = false;
+
         // clean up dynamic uniform buffer & memory
         backendContext->vkFunctionTable.vkUnmapMemory(backendContext->device, backendContext->uniformBufferMemory);
         backendContext->vkFunctionTable.vkFreeMemory(backendContext->device, backendContext->uniformBufferMemory, VK_NULL_HANDLE);
@@ -2314,6 +2618,10 @@ FfxErrorCode CreateResourceVK(
         if (resourceState == FFX_RESOURCE_STATE_COPY_DEST)
             bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
+        // vkfw patch: descriptor buffer mode addresses buffers.
+        if (backendContext->useDescriptorBuffers)
+            bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
         if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &bufferInfo, NULL, &backendResource->bufferResource) != VK_SUCCESS) {
             return FFX_ERROR_BACKEND_API_ERROR;
         }
@@ -2325,7 +2633,7 @@ FfxErrorCode CreateResourceVK(
         backendContext->vkFunctionTable.vkGetBufferMemoryRequirements(backendContext->device, backendResource->bufferResource, &memRequirements);
 
         // allocate the memory
-        FfxErrorCode errorCode = allocateDeviceMemory(backendContext, memRequirements, requiredMemoryProperties, backendResource);
+        FfxErrorCode errorCode = allocateDeviceMemory(backendContext, memRequirements, requiredMemoryProperties, backendResource, backendContext->useDescriptorBuffers);
         if (FFX_OK != errorCode)
             return errorCode;
 
@@ -2998,7 +3306,7 @@ FfxErrorCode registerStaticTextureSrv(BackendContext_VK* backendContext, const F
         imageDescriptorInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         imageDescriptorInfo.imageView   = backendContext->pResourceViews[imageViewIndex].imageView;
 
-        backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, 1, &writeDescriptorSet, 0, nullptr);
+        updateBindlessDescriptor(backendContext, effectContext, 0, writeDescriptorSet);
 
         return FFX_OK;
 
@@ -3038,9 +3346,9 @@ FfxErrorCode registerStaticBufferSrv(BackendContext_VK* backendContext, const Ff
 
         bufferDescriptorInfo.buffer = buffer;
         bufferDescriptorInfo.offset = offset;
-        bufferDescriptorInfo.range  = size > 0 ? size : VK_WHOLE_SIZE;
+        bufferDescriptorInfo.range  = size > 0 ? size : (backendContext->useDescriptorBuffers ? inResource->description.size - offset : VK_WHOLE_SIZE);
 
-        backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, 1, &writeDescriptorSet, 0, nullptr);
+        updateBindlessDescriptor(backendContext, effectContext, 1, writeDescriptorSet);
 
         return FFX_OK;
     }
@@ -3149,7 +3457,7 @@ FfxErrorCode registerStaticTextureUav(BackendContext_VK* backendContext, const F
         imageDescriptorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         imageDescriptorInfo.imageView   = backendContext->pResourceViews[imageViewIndex].imageView;
 
-        backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, 1, &writeDescriptorSet, 0, nullptr);
+        updateBindlessDescriptor(backendContext, effectContext, 2, writeDescriptorSet);
 
         return FFX_OK;
 
@@ -3189,9 +3497,9 @@ FfxErrorCode registerStaticBufferUav(BackendContext_VK* backendContext, const Ff
 
         bufferDescriptorInfo.buffer = buffer;
         bufferDescriptorInfo.offset = offset;
-        bufferDescriptorInfo.range  = size > 0 ? size : VK_WHOLE_SIZE;
+        bufferDescriptorInfo.range  = size > 0 ? size : (backendContext->useDescriptorBuffers ? inResource->description.size - offset : VK_WHOLE_SIZE);
 
-        backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, 1, &writeDescriptorSet, 0, nullptr);
+        updateBindlessDescriptor(backendContext, effectContext, 3, writeDescriptorSet);
 
         return FFX_OK;
     }
@@ -3371,10 +3679,11 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
     // Support more when needed
     VkShaderStageFlags shaderStageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // Samplers - just the static ones for now
+    // Samplers - just the static ones for now (vkfw patch: in descriptor buffer mode not immutable: written into the set's template)
     for (uint32_t currentSamplerIndex = 0; currentSamplerIndex < samplerCount; ++currentSamplerIndex)
         layoutBindings[numLayoutBindings++] = {
-            currentSamplerIndex + SAMPLER_BINDING_SHIFT, VK_DESCRIPTOR_TYPE_SAMPLER, 1, shaderStageFlags, &pPipelineLayout->samplers[currentSamplerIndex]};
+            currentSamplerIndex + SAMPLER_BINDING_SHIFT, VK_DESCRIPTOR_TYPE_SAMPLER, 1, shaderStageFlags,
+            backendContext->useDescriptorBuffers ? nullptr : &pPipelineLayout->samplers[currentSamplerIndex]};
 
     // Texture SRVs
     for (uint32_t srvIndex = 0; srvIndex < shaderBlob.srvTextureCount; ++srvIndex)
@@ -3460,14 +3769,44 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = numLayoutBindings;
     layoutInfo.pBindings = layoutBindings;
+    if (backendContext->useDescriptorBuffers)
+        layoutInfo.flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
 
     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(backendContext->device, &layoutInfo, nullptr, &pPipelineLayout->descriptorSetLayout) != VK_SUCCESS) {
         return FFX_ERROR_BACKEND_API_ERROR;
     }
 
-    // allocate descriptor sets
+    // vkfw patch, descriptor buffer mode: the set's size, its bindings' offsets, and its template (null descriptors, and the samplers).
+    pPipelineLayout->dbSetSize      = 0;
+    pPipelineLayout->dbBindingCount = 0;
+    pPipelineLayout->dbTemplate     = nullptr;
+    if (backendContext->useDescriptorBuffers)
+    {
+        backendContext->vkFunctionTable.vkGetDescriptorSetLayoutSizeEXT(backendContext->device, pPipelineLayout->descriptorSetLayout, &pPipelineLayout->dbSetSize);
+        pPipelineLayout->dbTemplate = (uint8_t*)calloc(1, size_t(pPipelineLayout->dbSetSize > 0 ? pPipelineLayout->dbSetSize : 1));
+        if (!pPipelineLayout->dbTemplate)
+            return FFX_ERROR_OUT_OF_MEMORY;
+        for (uint32_t binding = 0; binding < numLayoutBindings; ++binding)
+        {
+            const VkDescriptorSetLayoutBinding& layoutBinding = layoutBindings[binding];
+            VkDeviceSize                        offset        = 0;
+            backendContext->vkFunctionTable.vkGetDescriptorSetLayoutBindingOffsetEXT(backendContext->device, pPipelineLayout->descriptorSetLayout, layoutBinding.binding, &offset);
+            pPipelineLayout->dbBindings[pPipelineLayout->dbBindingCount]       = layoutBinding.binding;
+            pPipelineLayout->dbBindingOffsets[pPipelineLayout->dbBindingCount] = offset;
+            ++pPipelineLayout->dbBindingCount;
+            const size_t stride = dbDescriptorSize(backendContext, layoutBinding.descriptorType);
+            for (uint32_t element = 0; element < layoutBinding.descriptorCount; ++element)
+            {
+                const VkSampler sampler = layoutBinding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER
+                                              ? pPipelineLayout->samplers[layoutBinding.binding - SAMPLER_BINDING_SHIFT] : VK_NULL_HANDLE;
+                dbGetDescriptor(backendContext, layoutBinding.descriptorType, nullptr, VK_NULL_HANDLE, 0, 0, sampler, pPipelineLayout->dbTemplate + offset + element * stride);
+            }
+        }
+    }
+
+    // allocate descriptor sets (none in descriptor buffer mode)
     pPipelineLayout->descriptorSetIndex = 0;
-    for (uint32_t i = 0; i < (FFX_MAX_QUEUED_FRAMES * PIPELINE_DESCRIPTOR_SETS_PER_FRAME); i++)
+    for (uint32_t i = 0; !backendContext->useDescriptorBuffers && i < (FFX_MAX_QUEUED_FRAMES * PIPELINE_DESCRIPTOR_SETS_PER_FRAME); i++)
     {
         VkDescriptorSetAllocateInfo allocateInfo = {};
         allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -3687,6 +4026,8 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
     pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineCreateInfo.stage = shaderStageCreateInfo;
     pipelineCreateInfo.layout = pPipelineLayout->pipelineLayout;
+    if (backendContext->useDescriptorBuffers)
+        pipelineCreateInfo.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;  // vkfw patch
 
     VkPipeline computePipeline = VK_NULL_HANDLE;
     if (backendContext->vkFunctionTable.vkCreateComputePipelines(backendContext->device, nullptr, 1, &pipelineCreateInfo, nullptr, &computePipeline) != VK_SUCCESS) {
@@ -3735,11 +4076,14 @@ FfxErrorCode DestroyPipelineVK(FfxInterface* backendInterface, FfxPipelineState*
             pPipelineLayout->pipelineLayout = VK_NULL_HANDLE;
         }
 
-        // Descriptor sets
+        // Descriptor sets (none in descriptor buffer mode: its template instead)
         for (uint32_t i = 0; i < FFX_MAX_QUEUED_FRAMES * PIPELINE_DESCRIPTOR_SETS_PER_FRAME; i++) {
-            backendContext->vkFunctionTable.vkFreeDescriptorSets(backendContext->device, backendContext->descriptorPool, 1, &pPipelineLayout->descriptorSets[i]);
+            if (pPipelineLayout->descriptorSets[i] != VK_NULL_HANDLE)
+                backendContext->vkFunctionTable.vkFreeDescriptorSets(backendContext->device, backendContext->descriptorPool, 1, &pPipelineLayout->descriptorSets[i]);
             pPipelineLayout->descriptorSets[i] = VK_NULL_HANDLE;
         }
+        free(pPipelineLayout->dbTemplate);
+        pPipelineLayout->dbTemplate = nullptr;
 
         // Descriptor set layout
         if (pPipelineLayout->descriptorSetLayout != VK_NULL_HANDLE) {
@@ -3869,7 +4213,8 @@ static FfxErrorCode executeGpuJobCompute(BackendContext_VK*    backendContext,
         bufferDescriptorInfos[bufferDescriptorIndex] = {};
         bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].bufferResource;
         bufferDescriptorInfos[bufferDescriptorIndex].offset = bufferUAV.offset;
-        bufferDescriptorInfos[bufferDescriptorIndex].range  = bufferUAV.size > 0 ? bufferUAV.size : VK_WHOLE_SIZE;
+        bufferDescriptorInfos[bufferDescriptorIndex].range  = bufferUAV.size > 0 ? bufferUAV.size
+                                                              : (backendContext->useDescriptorBuffers ? backendContext->pResources[resourceIndex].resourceDescription.size - bufferUAV.offset : VK_WHOLE_SIZE);
 
         bufferDescriptorIndex++;
         descriptorWriteIndex++;
@@ -3942,7 +4287,8 @@ static FfxErrorCode executeGpuJobCompute(BackendContext_VK*    backendContext,
         bufferDescriptorInfos[bufferDescriptorIndex]        = {};
         bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].bufferResource;
         bufferDescriptorInfos[bufferDescriptorIndex].offset = bufferSRV.offset;
-        bufferDescriptorInfos[bufferDescriptorIndex].range  = bufferSRV.size > 0 ? bufferSRV.size : VK_WHOLE_SIZE;
+        bufferDescriptorInfos[bufferDescriptorIndex].range  = bufferSRV.size > 0 ? bufferSRV.size
+                                                              : (backendContext->useDescriptorBuffers ? backendContext->pResources[resourceIndex].resourceDescription.size - bufferSRV.offset : VK_WHOLE_SIZE);
     
         bufferDescriptorIndex++;
         descriptorWriteIndex++;
@@ -3986,6 +4332,62 @@ static FfxErrorCode executeGpuJobCompute(BackendContext_VK*    backendContext,
 
     // insert all the barriers
     flushBarriers(backendContext, vkCommandBuffer);
+
+    // vkfw patch, descriptor buffer mode: the set into a slot of the ring (the template, then this pass's descriptors over it), selected by
+    // offset with the effect's bindless sets; the buffer is bound once a dispatch (ExecuteGpuJobsVK restores the application's after).
+    if (backendContext->useDescriptorBuffers)
+    {
+        const VkDeviceSize setOffset = dbAllocateRing(backendContext, pipelineLayout->dbSetSize);
+        uint8_t*           setBase   = backendContext->dbMapped + setOffset;
+        memcpy(setBase, pipelineLayout->dbTemplate, size_t(pipelineLayout->dbSetSize));
+        for (uint32_t write = 0; write < descriptorWriteIndex; ++write)
+        {
+            const VkWriteDescriptorSet& descriptorWrite = writeDescriptorSets[write];
+            for (uint32_t binding = 0; binding < pipelineLayout->dbBindingCount; ++binding)
+            {
+                if (pipelineLayout->dbBindings[binding] == descriptorWrite.dstBinding)
+                {
+                    dbWriteDescriptor(backendContext, descriptorWrite, setBase + pipelineLayout->dbBindingOffsets[binding]);
+                    break;
+                }
+            }
+        }
+
+        backendContext->vkFunctionTable.vkCmdBindPipeline(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, reinterpret_cast<VkPipeline>(job->computeJobDescriptor.pipeline.pipeline));
+        if (!backendContext->dbBound)
+        {
+            VkDescriptorBufferBindingInfoEXT bindingInfo = {VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT};
+            bindingInfo.address = backendContext->dbAddress;
+            bindingInfo.usage   = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
+            backendContext->vkFunctionTable.vkCmdBindDescriptorBuffersEXT(vkCommandBuffer, 1, &bindingInfo);
+            backendContext->dbBound = true;
+        }
+        BackendContext_VK::EffectContext& effectContext = backendContext->pEffectContexts[effectContextId];
+        const uint32_t bufferIndex = 0;
+        const auto     setOffsets  = [&](uint32_t set, VkDeviceSize offset) {
+            backendContext->vkFunctionTable.vkCmdSetDescriptorBufferOffsetsEXT(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout->pipelineLayout, set, 1, &bufferIndex, &offset);
+        };
+        setOffsets(0, setOffset);
+        if (job->computeJobDescriptor.pipeline.staticTextureSrvCount > 0)
+            setOffsets(uint32_t(pipelineLayout->staticTextureSrvSet), effectContext.bindlessDbOffset[0]);
+        if (job->computeJobDescriptor.pipeline.staticBufferSrvCount > 0)
+            setOffsets(uint32_t(pipelineLayout->staticBufferSrvSet), effectContext.bindlessDbOffset[1]);
+        if (job->computeJobDescriptor.pipeline.staticTextureUavCount > 0)
+            setOffsets(uint32_t(pipelineLayout->staticTextureUavSet), effectContext.bindlessDbOffset[2]);
+        if (job->computeJobDescriptor.pipeline.staticBufferUavCount > 0)
+            setOffsets(uint32_t(pipelineLayout->staticBufferUavSet), effectContext.bindlessDbOffset[3]);
+
+        if (job->computeJobDescriptor.pipeline.cmdSignature)
+        {
+            const uint32_t argumentIndex = job->computeJobDescriptor.cmdArgument.internalIndex;
+            backendContext->vkFunctionTable.vkCmdDispatchIndirect(vkCommandBuffer, backendContext->pResources[argumentIndex].bufferResource, job->computeJobDescriptor.cmdArgumentOffset);
+        }
+        else
+        {
+            backendContext->vkFunctionTable.vkCmdDispatch(vkCommandBuffer, job->computeJobDescriptor.dimensions[0], job->computeJobDescriptor.dimensions[1], job->computeJobDescriptor.dimensions[2]);
+        }
+        return FFX_OK;
+    }
 
     // update all uavs and srvs
     backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, descriptorWriteIndex, writeDescriptorSets, 0, nullptr);
@@ -4212,6 +4614,7 @@ FfxErrorCode ExecuteGpuJobsVK(FfxInterface* backendInterface, FfxCommandList com
     VkCommandBuffer vkCommandBuffer = reinterpret_cast<VkCommandBuffer>(commandList);
 
     FfxErrorCode errorCode = FFX_OK;
+    backendContext->dbBound = false;
 
     // execute all renderjobs
     for (uint32_t i = 0; i < backendContext->gpuJobCount; ++i)
@@ -4252,6 +4655,14 @@ FfxErrorCode ExecuteGpuJobsVK(FfxInterface* backendInterface, FfxCommandList com
         if (gpuJob->jobLabel[0]) {
             endMarkerVK(backendContext, vkCommandBuffer);
         }
+    }
+
+    // vkfw patch, descriptor buffer mode: binding the backend's buffer replaced the application's; it re-binds them.
+    if (backendContext->dbBound)
+    {
+        backendContext->dbBound = false;
+        if (s_fpDescriptorBufferRestore)
+            s_fpDescriptorBufferRestore(vkCommandBuffer, s_pDescriptorBufferRestoreUser);
     }
 
     // check the execute function returned cleanly.

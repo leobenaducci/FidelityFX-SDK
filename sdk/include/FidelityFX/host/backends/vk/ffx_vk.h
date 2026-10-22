@@ -85,6 +85,24 @@ typedef struct VkFrameInterpolationInfoFFX
 /// @ingroup VKBackend
 FFX_API size_t ffxGetScratchMemorySizeVK(VkPhysicalDevice physicalDevice, size_t maxContexts);
 
+/// vkfw patch: called at the end of every ffx dispatch that bound the backend's descriptor buffer (ffxSetDescriptorBufferModeVK), with the
+/// command buffer it was recorded into: binding a descriptor buffer replaces every one bound before, so the application re-binds its own.
+typedef void (*FfxDescriptorBufferRestoreFuncVK)(VkCommandBuffer commandBuffer, void* userData);
+
+/// vkfw patch: record every pass's descriptors into a descriptor buffer (VK_EXT_descriptor_buffer) instead of classic descriptor sets: a
+/// set is written into mapped memory and selected by an offset, rather than allocated, updated and bound (the bind of a freshly written set
+/// cost the driver 6-8 us a dispatch). Call before the first backend context is created; it takes effect only if the device enables
+/// VK_EXT_descriptor_buffer (with descriptorBuffer), bufferDeviceAddress and robustness2's nullDescriptor. restore is called after every
+/// dispatch that bound the buffer (see FfxDescriptorBufferRestoreFuncVK).
+///
+/// @ingroup VKBackend
+FFX_API void ffxSetDescriptorBufferModeVK(bool enable, FfxDescriptorBufferRestoreFuncVK restore, void* userData);
+
+/// vkfw patch: whether the backend records with descriptor buffers (after its first context has been created).
+///
+/// @ingroup VKBackend
+FFX_API bool ffxIsDescriptorBufferModeVK();
+
 /// Convenience structure to hold all VK-related device information
 typedef struct VkDeviceContext {
     VkDevice                vkDevice;           /// The Vulkan device
