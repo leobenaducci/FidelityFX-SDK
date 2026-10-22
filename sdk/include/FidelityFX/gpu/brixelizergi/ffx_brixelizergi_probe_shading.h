@@ -228,6 +228,13 @@ FfxFloat32 FfxBrixelizerGIGetVoxelSize(FfxFloat32x3 world_pos, FfxUInt32 g_start
     return CINFO.voxel_size * ffxMax(FfxFloat32(1.0), r);
 }
 
+// vkfw patch: no NaN or inf among v's components, by their exponent bits (all set): isnan and isinf can be folded away by a compiler that
+// assumes finite maths.
+FfxBoolean FfxBrixelizerGIFinite(FfxFloat32x4 v)
+{
+    return all(FFX_NOT_EQUAL(ffxAsUInt32(v) & FFX_BROADCAST_UINT32X4(0x7f800000u), FFX_BROADCAST_UINT32X4(0x7f800000u)));
+}
+
 // vkfw patch: a radiance texel is lit once anything wrote a non-zero radiance to it; zero (or not a number) is one nothing has reached.
 FfxBoolean FfxBrixelizerGIRadianceTexelLit(FfxFloat32x3 texel)
 {

@@ -50,6 +50,7 @@
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_RESAMPLED 11u         // slots a mover claim took that the resample turned or shifted
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDED_FINE 12u       // slots filled from the finer cascade's bricks inside them
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_UNLIT 13u             // bricks with a slot none of whose radiance texels is lit (the stats pass)
+#define FFX_BRIXELIZER_GI_SLOT_COUNTER_NONFINITE 14u         // bricks with a slot whose SH holds a NaN or an inf, its sample count included (the stats pass)
 
 // In the new-slot map between the claims and the allocation: the voxel's slot, which another brick claimed first (a body that moved into it). The
 // brick takes a new slot, copied from that one. Slots are below 2^18.
@@ -783,9 +784,17 @@ void FfxBrixelizerGISlotsStats(FfxUInt32 tid)
     const FfxUInt32 bucket = !(samples >= FfxFloat32(1.0)) ? 0u : min(1u + FfxUInt32(log2(samples)), 7u);
     SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_HISTOGRAM + bucket, 1u);
 
-    // The brick counts if none of its texels is lit (FfxBrixelizerGIRadianceTexelLit).
+    // The brick counts if none of its texels is lit (FfxBrixelizerGIRadianceTexelLit), and if its SH is not finite.
     if (GetSlotConstants().stats_unlit != 0u)
     {
+        FfxBoolean finite = true;
+        for (FfxUInt32 i = 0u; i < 9u && finite; ++i)
+        {
+            finite = FfxBrixelizerGIFinite(ffxUnpackF32x2(LoadBricksSH(slot * 9u + i)));
+        }
+        if (!finite)
+            SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_NONFINITE, 1u);
+
         const FfxUInt32x3 offset = FfxBrixelizerGetSDFAtlasOffset(slot) / 2;
         FfxBoolean        lit    = false;
         for (FfxUInt32 texel = 0u; texel < 64u && !lit; ++texel)
