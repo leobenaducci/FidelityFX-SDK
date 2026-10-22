@@ -83,6 +83,7 @@ static const ResourceBinding uavResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_PING_PONG_RESOURCE_STATIC_GI_TARGET_WRITE, L"g_sdfgi_rw_static_gitarget"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET, L"g_sdfgi_rw_debug_target"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY, L"g_sdfgi_rw_sky_visibility_target"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_WORLD_AO, L"g_sdfgi_rw_world_ao_target"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_STATE, L"g_rw_slot_state"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_CLAIM, L"g_rw_slot_claim"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_FREE_LIST, L"g_rw_slot_free_list"},
@@ -1786,29 +1787,32 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                           &pDispatchDescription->bricksDirectSH, &pDispatchDescription->bricksSHState, &pDispatchDescription->brickSlotMap, &pDispatchDescription->slotCounters,
                                           &pDispatchDescription->slotState, &pDispatchDescription->emptyBricks);
 
-    // vkfw patch: the sky visibility target, or, while there is none, the interpolation's debug target standing in for the binding it
-    // declares anyway (the shaders only write it with sky_visibility_enabled).
+    // vkfw patch: the sky visibility and world AO targets, or, for one that is not there, the interpolation's debug target standing in for
+    // the binding it declares anyway (the shaders write each only with its FFX_BRIXELIZER_GI_VISIBILITY_* flag).
     const bool bSkyVisibility = !isResourceNull(pDispatchDescription->skyVisibility);
-    if (bSkyVisibility)
+    const bool bWorldAO       = !isResourceNull(pDispatchDescription->worldAO);
+    const struct { bool bBound; const FfxResource* pResource; uint32_t id; } visibilityTargets[] = {
+        { bSkyVisibility, &pDispatchDescription->skyVisibility, FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY },
+        { bWorldAO, &pDispatchDescription->worldAO, FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_WORLD_AO },
+    };
+    for (const auto& target : visibilityTargets)
     {
-        pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
-                                                                         &pDispatchDescription->skyVisibility,
-                                                                         pContext->effectContextId,
-                                                                         &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY]);
+        if (target.bBound)
+            pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface, target.pResource,
+                                                                             pContext->effectContextId, &pContext->resources[target.id]);
+        else
+            pContext->resources[target.id] = pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET];
     }
-    else
-    {
-        pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_SKY_VISIBILITY] = pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_DEBUG_TARGET];
-    }
+    const bool bVisibility = bSkyVisibility || bWorldAO;
     // Its history alternates between the two targets each frame; it holds a previous frame's values only if that frame wrote it.
     const uint32_t skyHistoryWrite = pContext->skyVisibilityHistoryIndex ^ 1u;
     pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_READ] =
         pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_0 + pContext->skyVisibilityHistoryIndex];
     pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_WRITE] =
         pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_0 + skyHistoryWrite];
-    const bool bSkyVisibilityHistory      = bSkyVisibility && pContext->bSkyVisibilityHistoryValid;
+    const bool bSkyVisibilityHistory      = bVisibility && pContext->bSkyVisibilityHistoryValid;
     pContext->skyVisibilityHistoryIndex   = skyHistoryWrite;
-    pContext->bSkyVisibilityHistoryValid  = bSkyVisibility;
+    pContext->bSkyVisibilityHistoryValid  = bVisibility;
 pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDispatchDescription->bricksAABBs,
                                                                      pContext->effectContextId,
@@ -1938,7 +1942,8 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
     giConstants.tracing_constants.preview_sdf_solve_eps  = 0.0f;
     giConstants.tracing_constants.t_min                  = pDispatchDescription->tMin;
     giConstants.tracing_constants.t_max                  = pDispatchDescription->tMax;
-    giConstants.sky_visibility_enabled                   = bSkyVisibility ? (bSkyVisibilityHistory ? 2u : 1u) : 0u;
+    giConstants.visibility_flags                         = (bSkyVisibility ? FFX_BRIXELIZER_GI_VISIBILITY_SKY : 0u) | (bWorldAO ? FFX_BRIXELIZER_GI_VISIBILITY_AO : 0u) |
+                                                           (bSkyVisibilityHistory ? FFX_BRIXELIZER_GI_VISIBILITY_HISTORY : 0u);
     giConstants.world_ao_radius                          = pDispatchDescription->worldAORadius > 0.0f ? pDispatchDescription->worldAORadius : 1.0f;
     giConstants.cache_feed_max                           = isResourceNull(pDispatchDescription->cacheFeed) ? 0u : pDispatchDescription->maxCacheFeedEntries;
     giConstants.cache_feed_flags                         = pDispatchDescription->cacheFeedFlags;

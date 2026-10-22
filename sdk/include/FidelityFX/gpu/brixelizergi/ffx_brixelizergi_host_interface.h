@@ -68,7 +68,7 @@ struct FfxBrixelizerGIConstants
 
     FfxFloat32x2 motionVectorScale;
     FfxUInt32    debug_type;
-    FfxUInt32    sky_visibility_enabled;  // vkfw patch: the dispatch has a skyVisibility target to write
+    FfxUInt32    visibility_flags;        // vkfw patch: FFX_BRIXELIZER_GI_VISIBILITY_*: the targets the dispatch writes, and their history
 
     FfxUInt32x2 buffer_dimensions;
     FfxUInt32x2 probe_buffer_dimensions;
@@ -90,7 +90,7 @@ struct FfxBrixelizerGIConstants
 
     FfxBrixelizerGITracingConstants tracing_constants;
 
-    FfxFloat32   world_ao_radius;         // vkfw patch: the skyVisibility target's .y: the AO's reach (FfxBrixelizerGIDispatchDescription::worldAORadius)
+    FfxFloat32   world_ao_radius;         // vkfw patch: the worldAO target's reach (FfxBrixelizerGIDispatchDescription::worldAORadius)
     FfxUInt32    cache_feed_max;          // vkfw patch: FfxBrixelizerGIDispatchDescription::maxCacheFeedEntries (0: no feed)
     FfxUInt32    cache_feed_flags;        // vkfw patch: FfxBrixelizerGICacheFeedFlags
     FfxFloat32   cache_feed_max_samples;  // vkfw patch: the sample count a fed brick's irradiance can reach
@@ -105,6 +105,12 @@ struct FfxBrixelizerGIPassConstants
 
 // vkfw patch: FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS. A body that moved since a cascade's last bake: a voxel of it inside the bounds was, then, at the
 // point the 3x4 row-major transform takes it to.
+// vkfw patch: FfxBrixelizerGIConstants::visibility_flags. SKY and AO: the dispatch has the skyVisibility / worldAO target (the probe work
+// both read runs while either is set); HISTORY: the visibility history holds a previous frame's values (sky .x, frames .y, AO .z).
+#define FFX_BRIXELIZER_GI_VISIBILITY_SKY     1u
+#define FFX_BRIXELIZER_GI_VISIBILITY_AO      2u
+#define FFX_BRIXELIZER_GI_VISIBILITY_HISTORY 4u
+
 #define FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS 512
 
 struct FfxBrixelizerGISlotMover

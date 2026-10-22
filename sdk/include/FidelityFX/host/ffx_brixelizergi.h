@@ -265,11 +265,15 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource levelSlotMaps;              ///< vkfw patch: FFX_BRIXELIZER_GI_LEVEL_SLOT_MAPS_SIZE bytes, each merged cascade's slot per voxel. The four persist across dispatches and GI contexts: zeroed by the application when first handed in, and whenever it starts the cache over (with brickSlotMap filled with 0xffffffff and the host half zeroed).
 
     /// vkfw patch: optional, a R16G16B16A16_FLOAT UAV of ffxBrixelizerGIGetInternalSize() whose .x receives the sky visibility the screen probes'
-    /// rays saw, as 0 to 1 (1 = open sky) for the surface under each pixel; .w is 1. Leave it null (its FfxResource zero-initialised) to skip the
-    /// work. Taken from the rays the GI traces anyway: a ray that left the scene without a hit counts as sky, so it knows nothing of what the
-    /// TLAS or a celestial body would add, and the rays only reach tMax. Written at the GI's internal resolution (not upsampled).
+    /// rays saw, as 0 to 1 (1 = open sky) for the surface under each pixel; .w is 1. Leave it null (its FfxResource zero-initialised) to skip it.
+    /// Taken from the rays the GI traces anyway: a ray that left the scene without a hit counts as sky, so it knows nothing of what the TLAS or
+    /// a celestial body would add, and the rays only reach tMax. Written at the GI's internal resolution (not upsampled).
     FfxResource skyVisibility;
-    float       worldAORadius;              ///< vkfw patch: the reach of the world AO the skyVisibility target holds in .y (1 m if 0).
+    /// vkfw patch: optional, the same for the world AO: .x 1 minus the occlusion (1 - distance / worldAORadius)^2 of the same rays' hits
+    /// within worldAORadius, low-frequency (one value a screen probe, interpolated); .w is 1. Independent of skyVisibility: either, both or
+    /// neither (the probe and interpolation work they share runs while either is bound).
+    FfxResource worldAO;
+    float       worldAORadius;              ///< vkfw patch: the world AO's reach (1 m if 0).
 
     /// vkfw patch: the application's own estimate of the world cache, for bricks the screen never shows (probes, ray tracing): a buffer of
     /// FfxBrixelizerGICacheFeedEntry, read by the GI's cache feed pass after its slot passes and before it shades. Each entry lands in the

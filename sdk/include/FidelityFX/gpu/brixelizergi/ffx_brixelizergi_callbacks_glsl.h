@@ -56,7 +56,7 @@ FfxUInt32 GetTracingConstantsEndCascade();
 FfxFloat32 GetTracingConstantsRayPushoff();
 FfxFloat32 GetTracingConstantsTMin();
 FfxFloat32 GetTracingConstantsTMax();
-FfxUInt32 GetSkyVisibilityEnabled();
+FfxUInt32 GetVisibilityFlags();
 FfxFloat32 GetTracingConstantsSDFSolveEpsilon();
 FfxFloat32 GetTracingConstantsSpecularRayPushoff();
 FfxFloat32 GetTracingConstantsSpecularSDFSolveEpsilon();
@@ -121,6 +121,7 @@ void StoreStaticGITarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x4 LoadDebugTraget(FfxUInt32x2 coord);
 void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
+void StoreWorldAOTarget(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32x4 LoadSkyVisibilityHistory(FfxUInt32x2 coord);
 void StoreSkyVisibilityHistory(FfxUInt32x2 coord, FfxFloat32x4 value);
 FfxFloat32 GetWorldAORadius();
@@ -313,6 +314,9 @@ FfxUInt32 LoadCascadeBrickMapArrayNonUniform(FfxUInt32 cascadeID, FfxUInt32 elem
 
 #if defined BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET
     layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_SKY_VISIBILITY_TARGET, rgba16f)         uniform image2D g_sdfgi_rw_sky_visibility_target;
+#endif
+#if defined BRIXELIZER_GI_BIND_UAV_WORLD_AO_TARGET
+    layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_WORLD_AO_TARGET, rgba16f)               uniform image2D g_sdfgi_rw_world_ao_target;
 #endif
 
 #if defined BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY
@@ -853,9 +857,9 @@ FfxFloat32 GetCacheFeedMaxSamples()
     return GetGIConstants().cache_feed_max_samples;
 }
 
-FfxUInt32 GetSkyVisibilityEnabled()
+FfxUInt32 GetVisibilityFlags()
 {
-    return g_sdfgi_constants.data.sky_visibility_enabled;
+    return g_sdfgi_constants.data.visibility_flags;
 }
 
 FfxFloat32 GetTracingConstantsSDFSolveEpsilon()
@@ -1273,6 +1277,13 @@ void StoreDebugTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 void StoreSkyVisibilityTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
 {
     imageStore(g_sdfgi_rw_sky_visibility_target, FfxInt32x2(coord), value);
+}
+#endif
+
+#if defined BRIXELIZER_GI_BIND_UAV_WORLD_AO_TARGET
+void StoreWorldAOTarget(FfxUInt32x2 coord, FfxFloat32x4 value)
+{
+    imageStore(g_sdfgi_rw_world_ao_target, FfxInt32x2(coord), value);
 }
 #endif
 

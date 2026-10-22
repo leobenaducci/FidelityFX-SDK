@@ -135,8 +135,10 @@
 // vkfw patch: the application's list of the bricks with too few samples (FfxBrixelizerGIDispatchDescription::emptyBricks); slotCounters
 // stands in for it while there is none.
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_EMPTY_BRICKS                         130
+// vkfw patch: the application's world AO target; the interpolation's debug target stands in for it while there is none.
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_OUTPUT_WORLD_AO                      131
 
-#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                131
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                132
 
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_GI_CONSTANTS                    0
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_PASS_CONSTANTS                  1
