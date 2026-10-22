@@ -163,6 +163,9 @@ void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
     {
         SlotCounterExchange(FFX_BRIXELIZER_GI_SLOT_COUNTER_SEEDS, 0u);
         SlotCounterExchange(FFX_BRIXELIZER_GI_SLOT_COUNTER_MOVER_CLAIMS, 0u);
+        // The dispatch's first level starts the empty-brick list over (the statistics pass of each level appends to it).
+        if (GetSlotConstants().empty_reset != 0u)
+            EmptyBricksStore(0u, 0u);
     }
 
     const FfxUInt32                cascade_idx = GetSlotConstants().cascade_index;
@@ -747,11 +750,30 @@ void FfxBrixelizerGISlotsStats(FfxUInt32 tid)
         return;
 
     SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_BRICKS, 1u);
-    const FfxUInt32 slot = BrickSlotMapLoad(FfxBrixelizerBrickGetIndex(brick));
+    const FfxUInt32  slot    = BrickSlotMapLoad(FfxBrixelizerBrickGetIndex(brick));
+    const FfxFloat32 samples = slot == FFX_BRIXELIZER_GI_SLOT_INVALID ? FfxFloat32(0.0) : ffxUnpackF32x2(LoadBricksSH(slot * 9u)).w;
+
+    // vkfw patch: the empty-brick list (FfxBrixelizerGIEmptyBrick, 8 uints after a 4-uint header).
+    if (GetSlotConstants().empty_max != 0u && !(samples >= GetSlotConstants().empty_threshold))
+    {
+        const FfxUInt32 entry = EmptyBricksAdd(1u);
+        if (entry < GetSlotConstants().empty_max)
+        {
+            const FfxFloat32x3 centre = cascade.grid_min + (FfxFloat32x3(voxel) + FFX_BROADCAST_FLOAT32X3(0.5)) * cascade.voxel_size;
+            const FfxUInt32    base   = 4u + entry * 8u;
+            EmptyBricksStore(base + 0u, ffxAsUInt32(centre.x));
+            EmptyBricksStore(base + 1u, ffxAsUInt32(centre.y));
+            EmptyBricksStore(base + 2u, ffxAsUInt32(centre.z));
+            EmptyBricksStore(base + 3u, ffxAsUInt32(cascade.voxel_size));
+            EmptyBricksStore(base + 4u, ffxAsUInt32(isnan(samples) ? FfxFloat32(0.0) : samples));
+            EmptyBricksStore(base + 5u, cascade_idx);
+            EmptyBricksStore(base + 6u, FfxBrixelizerBrickGetIndex(brick));
+            EmptyBricksStore(base + 7u, 0u);
+        }
+    }
     if (slot == FFX_BRIXELIZER_GI_SLOT_INVALID)
         return;
 
-    const FfxFloat32 samples = ffxUnpackF32x2(LoadBricksSH(slot * 9u)).w;
     // 0: none (or not a number); then one bucket a doubling, the last open-ended.
     const FfxUInt32 bucket = !(samples >= FfxFloat32(1.0)) ? 0u : min(1u + FfxUInt32(log2(samples)), 7u);
     SlotCounterAdd(FFX_BRIXELIZER_GI_SLOT_COUNTER_HISTOGRAM + bucket, 1u);

@@ -48,7 +48,7 @@ static const ResourceBinding srvResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP, L"g_bctx_brick_slot_map"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED, L"r_cache_feed"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED_COUNT, L"r_cache_feed_count"},
-{FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_ENVIRONMENT_MAP, L"g_environment_map"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_ENVIRONMENT_MAP, L"g_environment_map"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_PREV_LIT_OUTPUT, L"g_prev_lit_output"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_DEPTH, L"g_depth"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_HISTORY_DEPTH, L"g_history_depth"},
@@ -91,6 +91,7 @@ static const ResourceBinding uavResourceBindingTable[] = {
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SEED_LIST, L"g_rw_seed_list"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_MOVER_CLAIMS, L"g_rw_mover_claims"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_COUNTERS, L"g_rw_slot_counters"},
+    {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_EMPTY_BRICKS, L"g_rw_empty_bricks"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP, L"g_rw_bctx_brick_slot_map"},
 {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SKY_VISIBILITY_HISTORY_WRITE, L"g_sdfgi_rw_sky_visibility_history"},
     {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_RADIANCE_CACHE, L"g_rw_bctx_radiance_cache"},
@@ -930,7 +931,7 @@ static bool brixelizerGIIsExternalResource(uint32_t flags, uint32_t resourceId)
 // slotState: the dispatch's slotState and the three after it (the slot passes'), or NULL where nothing runs them (the debug view).
 static void brixelizerGIRegisterExternalResources(FfxBrixelizerGIContext_Private* pContext, const FfxResource* radianceCache,
     const FfxResource* bricksSH, const FfxResource* bricksDirectSH, const FfxResource* bricksSHState, const FfxResource* brickSlotMap, const FfxResource* slotCounters,
-    const FfxResource* slotState)
+    const FfxResource* slotState, const FfxResource* emptyBricks)
 {
     FfxInterface& backend = pContext->contextDescription.backendInterface;
     if (pContext->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS)
@@ -938,6 +939,10 @@ static void brixelizerGIRegisterExternalResources(FfxBrixelizerGIContext_Private
         backend.fpRegisterResource(&backend, brickSlotMap, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_BRICK_SLOT_MAP]);
         if (slotCounters->resource != NULL)
             backend.fpRegisterResource(&backend, slotCounters, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_COUNTERS]);
+        // vkfw patch: the empty-brick list, or the counters in its place (the passes write it only with empty_max).
+        const FfxResource* emptyList = (emptyBricks && emptyBricks->resource != NULL) ? emptyBricks : slotCounters;
+        if (emptyList->resource != NULL)
+            backend.fpRegisterResource(&backend, emptyList, pContext->effectContextId, &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_EMPTY_BRICKS]);
         static const uint32_t stateIds[] = {FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_STATE, FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_CLAIM,
                                             FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_SLOT_FREE_LIST, FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_LEVEL_SLOT_MAPS};
         for (uint32_t i = 0; slotState && i < FFX_ARRAY_ELEMENTS(stateIds); ++i)
@@ -1554,6 +1559,8 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
 {
     FfxBrixelizerGISlotConstants& constants = pContext->slotConstants;
     constexpr uint32_t voxels = FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION;
+    const bool bEmptyList  = !isResourceNull(pDispatchDescription->emptyBricks) && pDispatchDescription->maxEmptyBricks > 0;
+    bool       bFirstLevel = true;
 
     for (uint32_t level = 0; level < FFX_BRIXELIZER_GI_SLOT_LEVELS; ++level)
     {
@@ -1588,6 +1595,10 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         constants.seed_min_samples      = pDispatchDescription->seedMinSamples;
         constants.claim_tag             = ++slotState->claimTag;
         constants.static_source_cascade = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC) ? level : 0xffffffffu;
+        constants.empty_max             = bEmptyList ? pDispatchDescription->maxEmptyBricks : 0u;
+        constants.empty_threshold       = pDispatchDescription->emptyBrickMaxSamples > 0.0f ? pDispatchDescription->emptyBrickMaxSamples : 1.0f;
+        constants.empty_reset           = bEmptyList && bFirstLevel ? 1u : 0u;
+        bFirstLevel                     = false;
 
         // This level's movers: each transform is from the last bake of the levels its mask names.
         constants.num_movers = 0;
@@ -1636,7 +1647,8 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         scheduleDispatch(pContext, &pContext->pipelineSlotsApply, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsSeed, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsResample, groups, 1, 1);
-        if (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_STATS)
+        // The statistics pass also lists the empty bricks.
+        if ((pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_STATS) || bEmptyList)
             scheduleDispatch(pContext, &pContext->pipelineSlotsStats, groups, 1, 1);
 
         previous.valid = 1u;
@@ -1768,7 +1780,7 @@ static FfxErrorCode brixelizerGIDispatch(FfxBrixelizerGIContext_Private*        
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
     brixelizerGIRegisterExternalResources(pContext, &pDispatchDescription->radianceCache, &pDispatchDescription->bricksSH,
                                           &pDispatchDescription->bricksDirectSH, &pDispatchDescription->bricksSHState, &pDispatchDescription->brickSlotMap, &pDispatchDescription->slotCounters,
-                                          &pDispatchDescription->slotState);
+                                          &pDispatchDescription->slotState, &pDispatchDescription->emptyBricks);
 
     // vkfw patch: the sky visibility target, or, while there is none, the interpolation's debug target standing in for the binding it
     // declares anyway (the shaders only write it with sky_visibility_enabled).
@@ -2248,7 +2260,7 @@ static FfxErrorCode brixelizerGIDebugVisualization(FfxBrixelizerGIContext_Privat
                                                                      &pContext->resources[FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_INPUT_SDF_ATLAS]);
     brixelizerGIRegisterExternalResources(pContext, &pDebugDescription->radianceCache, &pDebugDescription->bricksSH,
                                           &pDebugDescription->bricksDirectSH, &pDebugDescription->bricksSHState, &pDebugDescription->brickSlotMap, &pDebugDescription->slotCounters,
-                                          NULL);
+                                          NULL, NULL);
     pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->contextDescription.backendInterface,
                                                                      &pDebugDescription->bricksAABBs,
                                                                      pContext->effectContextId,
@@ -2411,7 +2423,8 @@ FfxErrorCode ffxBrixelizerGIContextDispatch(FfxBrixelizerGIContext*             
     // vkfw patch: the slot passes bind the application's slot state; without it they would bind nothing.
     FFX_RETURN_ON_ERROR(!(contextPrivate->contextDescription.flags & FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS) ||
                             (pDispatchDescription->slotState.resource && pDispatchDescription->slotClaim.resource && pDispatchDescription->slotFreeList.resource &&
-                             pDispatchDescription->levelSlotMaps.resource && pDispatchDescription->brickSlotMap.resource),
+                             pDispatchDescription->levelSlotMaps.resource && pDispatchDescription->brickSlotMap.resource &&
+                             pDispatchDescription->slotCounters.resource),
                         FFX_ERROR_INVALID_ARGUMENT);
 
     // dispatch the Brixelizer passes.

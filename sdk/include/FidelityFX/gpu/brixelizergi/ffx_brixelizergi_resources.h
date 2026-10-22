@@ -132,8 +132,11 @@
 // vkfw patch: the application's cache feed (FfxBrixelizerGIDispatchDescription::cacheFeed, cacheFeedCount).
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED                           128
 #define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_CACHE_FEED_COUNT                     129
+// vkfw patch: the application's list of the bricks with too few samples (FfxBrixelizerGIDispatchDescription::emptyBricks); slotCounters
+// stands in for it while there is none.
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_EMPTY_BRICKS                         130
 
-#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                130
+#define FFX_BRIXELIZER_GI_RESOURCE_IDENTIFIER_COUNT                                131
 
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_GI_CONSTANTS                    0
 #define FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_PASS_CONSTANTS                  1

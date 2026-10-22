@@ -39,6 +39,7 @@
 #define BRIXELIZER_GI_BIND_UAV_SLOT_CLAIM                       2002
 #define BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS                    2003
 #define BRIXELIZER_GI_BIND_UAV_MOVER_CLAIMS                     2004
+#define BRIXELIZER_GI_BIND_UAV_EMPTY_BRICKS                     2005
 
 #define BRIXELIZER_BIND_CB_CONTEXT_INFO                         3001
 #define BRIXELIZER_GI_BIND_CB_SLOT_CONSTANTS                    3003

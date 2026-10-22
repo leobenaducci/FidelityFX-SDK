@@ -140,6 +140,19 @@ typedef enum FfxBrixelizerGICacheFlags
 /// @ingroup ffxBrixelizer
 FFX_API FfxErrorCode ffxBrixelizerGIGetDroppedMovers(FfxBrixelizerGIContext* context, uint32_t* outDropped);
 
+/// vkfw patch: an entry of FfxBrixelizerGIDispatchDescription::emptyBricks: 32 bytes.
+///
+/// @ingroup ffxBrixelizer
+typedef struct FfxBrixelizerGIEmptyBrick
+{
+    float    worldPosition[3];  ///< The centre of the brick's voxel.
+    float    voxelSize;         ///< Its cascade's voxel size: the brick covers worldPosition +- voxelSize / 2.
+    float    samples;           ///< The samples its irradiance has (0 with no cache slot).
+    uint32_t cascadeIndex;      ///< The merged cascade (raw index) it is in.
+    uint32_t brick;             ///< Its brick index (valid until its cascade's next rebuild).
+    uint32_t padding;
+} FfxBrixelizerGIEmptyBrick;
+
 /// vkfw patch: what FfxBrixelizerGIDispatchDescription::cacheFeed holds, an entry each: 88 bytes, std430, no padding.
 ///
 /// sh is the brick cache's own form (the irradiance SH Brixelizer GI keeps per brick, FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE's bricksSH):
@@ -222,7 +235,7 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource bricksDirectSH;             ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS * 9 FfxUInt32x2, the direct part of the same.
     FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32x4.
     FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none. Written by the context.
-    FfxResource slotCounters;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: 64 FfxUInt32, zeroed by the application before each dispatch with an updatedCascadeMask; the context counts into it (the first 32 are statistics: see ffx_brixelizergi_cache_slots.h).
+    FfxResource slotCounters;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS (required): 64 FfxUInt32, zeroed by the application before each dispatch with an updatedCascadeMask; the context counts into it (the first 32 are statistics: see ffx_brixelizergi_cache_slots.h).
     FfxResource slotState;                  ///< vkfw patch: with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS, the GPU half of the cache slot state (the host half is the Brixelizer context's, FfxBrixelizerRawCacheSlotState): FFX_BRIXELIZER_GI_SLOT_STATE_SIZE bytes, the free list's head and counts.
     FfxResource slotClaim;                  ///< vkfw patch: FFX_BRIXELIZER_GI_SLOT_CLAIM_SIZE bytes, each slot's claim in the last bake.
     FfxResource slotFreeList;               ///< vkfw patch: FFX_BRIXELIZER_GI_SLOT_FREE_LIST_SIZE bytes, the free slots.
@@ -245,6 +258,14 @@ typedef struct FfxBrixelizerGIDispatchDescription
     uint32_t    maxCacheFeedEntries;
     uint32_t    cacheFeedFlags;             ///< FfxBrixelizerGICacheFeedFlags
     float       cacheFeedMaxSamples;        ///< The sample count a brick's irradiance stops at when it is fed (16 if 0): what the screen adds later still counts.
+    /// vkfw patch, optional (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS): the bricks the cache feed should fill. A buffer of 16 bytes of header (the
+    /// count, then 3 uint32s of padding) and maxEmptyBricks FfxBrixelizerGIEmptyBrick; whenever a dispatch rebuilds levels (updatedCascadeMask,
+    /// the SDK's own rebuilds) it is started over and every brick of those levels with fewer than emptyBrickMaxSamples samples (or no cache
+    /// slot) is listed. The count may exceed maxEmptyBricks (the entries past it are dropped). Read it a frame later, trace or probe those
+    /// places, and feed them back (cacheFeed, FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY).
+    FfxResource emptyBricks;
+    uint32_t    maxEmptyBricks;
+    float       emptyBrickMaxSamples;       ///< Listed below this many samples (1 if 0: bricks with none).
 
     /// vkfw patch, with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: what the bake before this dispatch did to the merged cascades. Bit i is merged cascade
     /// startCascade + i, rebuilt by that bake (normally one a frame, or none).

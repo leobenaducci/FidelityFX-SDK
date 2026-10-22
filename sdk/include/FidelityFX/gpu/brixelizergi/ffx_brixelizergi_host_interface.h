@@ -136,7 +136,12 @@ struct FfxBrixelizerGISlotConstants
     FfxUInt32    claim_tag;              // this bake's: a slot whose claim is it was claimed by a brick of this bake
     FfxUInt32    static_source_cascade;  // the level's static cascade (physical index), whose bricks ClaimMover leaves; 0xffffffff: none
     FfxUInt32    finer_cascade_index;    // the next finer merged cascade to seed a new brick from before the coarser one; 0xffffffff for none
+    FfxUInt32    empty_max;              // the empty-brick list's capacity, 0 without one (FfxBrixelizerGIDispatchDescription::emptyBricks)
+
+    FfxFloat32   empty_threshold;        // a brick with fewer samples than this is listed
+    FfxUInt32    empty_reset;            // the first level the dispatch rebuilds: its first pass starts the list over
     FfxUInt32    _padding2;
+    FfxUInt32    _padding3;
 
     FfxBrixelizerGISlotMover movers[FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS];
 };
