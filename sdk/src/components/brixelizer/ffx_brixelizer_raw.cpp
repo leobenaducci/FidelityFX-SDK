@@ -863,6 +863,27 @@ static void updateConstantBuffer(FfxBrixelizerRawContext_Private* context, uint3
     context->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&context->contextDescription.backendInterface, data, cbSizes[id], &context->constantBuffers[id]);
 }
 
+// vkfw patch: the per-instance tables brixelizerCreate puts on the heap.
+static void brixelizerFreeTables(FfxBrixelizerRawContext_Private* context)
+{
+    free(context->jobs);
+    free(context->indexOffsets);
+    free(context->hostInstances);
+    free(context->hostTransforms);
+    free(context->hostFreelist);
+    free(context->hostNewInstanceList);
+    free(context->bufferIndexFreeList);
+    free(context->pendingRemaps);
+    context->jobs = NULL;
+    context->indexOffsets = NULL;
+    context->hostInstances = NULL;
+    context->hostTransforms = NULL;
+    context->hostFreelist = NULL;
+    context->hostNewInstanceList = NULL;
+    context->bufferIndexFreeList = NULL;
+    context->pendingRemaps = NULL;
+}
+
 static FfxErrorCode brixelizerCreate(FfxBrixelizerRawContext_Private* context, const FfxBrixelizerRawContextDescription* contextDescription)
 {
     FFX_ASSERT(context);
@@ -871,6 +892,19 @@ static FfxErrorCode brixelizerCreate(FfxBrixelizerRawContext_Private* context, c
     // Setup the data for implementation.
     memset(context, 0, sizeof(FfxBrixelizerRawContext_Private));
     context->device = contextDescription->backendInterface.device;
+
+    // vkfw patch: the per-instance tables, on the heap (freed by brixelizerFreeTables, on release and on a failed creation).
+    context->jobs                = (FfxBrixelizerBrixelizationJob*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(FfxBrixelizerBrixelizationJob));
+    context->indexOffsets        = (uint32_t*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(uint32_t));
+    context->hostInstances       = (FfxBrixelizerInstanceInfo*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(FfxBrixelizerInstanceInfo));
+    context->hostTransforms      = (FfxFloat32x3x4*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(FfxFloat32x3x4));
+    context->hostFreelist        = (FfxBrixelizerInstanceID*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(FfxBrixelizerInstanceID));
+    context->hostNewInstanceList = (FfxBrixelizerInstanceID*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(FfxBrixelizerInstanceID));
+    context->bufferIndexFreeList = (uint32_t*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(uint32_t));
+    context->pendingRemaps       = (FfxBrixelizerRawMoverRemap*)calloc(FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS, sizeof(FfxBrixelizerRawMoverRemap));
+    FFX_RETURN_ON_ERROR(context->jobs && context->indexOffsets && context->hostInstances && context->hostTransforms && context->hostFreelist &&
+                            context->hostNewInstanceList && context->bufferIndexFreeList && context->pendingRemaps,
+                        FFX_ERROR_OUT_OF_MEMORY);
 
     memcpy(&context->contextDescription, contextDescription, sizeof(FfxBrixelizerRawContextDescription));
 
@@ -1224,6 +1258,7 @@ static FfxErrorCode brixelizerRelease(FfxBrixelizerRawContext_Private* context)
 
     // Destroy the context.
     context->contextDescription.backendInterface.fpDestroyBackendContext(&context->contextDescription.backendInterface, context->effectContextId);
+    brixelizerFreeTables(context);
 
     return FFX_OK;
 }
@@ -1805,6 +1840,9 @@ FfxErrorCode ffxBrixelizerRawContextCreate(FfxBrixelizerRawContext* context, con
     // create the context.
     FfxBrixelizerRawContext_Private* contextPrivate = (FfxBrixelizerRawContext_Private*)(context);
     const FfxErrorCode    errorCode      = brixelizerCreate(contextPrivate, contextDescription);
+    // vkfw patch: a failed creation is not destroyed by its caller: its tables go here.
+    if (errorCode != FFX_OK)
+        brixelizerFreeTables(contextPrivate);
 
     return errorCode;
 }

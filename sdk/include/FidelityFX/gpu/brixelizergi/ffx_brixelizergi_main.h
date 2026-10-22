@@ -1745,9 +1745,17 @@ FfxFloat32 size_weight           = ffxSaturate(eps_size / (GetContextInfo().casc
     {
         FfxFloat32   num_specular_samples = 0;
         FfxFloat32x4 specular_output      = LoadSpecularTarget(tid);
+        // vkfw patch: a NaN or an Inf, in this frame's trace or in the history, would stay in the history for good (every blend with it is
+        // one): this frame's counts as no sample (the irradiance below fills it), the history as none (it starts over).
+        if (any(isnan(specular_output)) || any(isinf(specular_output)))
+            specular_output = FFX_BROADCAST_FLOAT32X4(0.0);
+        if (any(isnan(specular_irradiance)) || any(isinf(specular_irradiance)))
+            specular_irradiance = FFX_BROADCAST_FLOAT32X3(0.0);
 
 #if FFX_BRIXELIZER_GI_OPTION_DISABLE_DENOISER == 0
         FfxFloat32x4 specular_history = LoadSpecularTargetSRV(tid.xy);
+        if (any(isnan(specular_history)) || any(isinf(specular_history)))
+            specular_history = FFX_BROADCAST_FLOAT32X4(0.0);
         num_specular_samples          = specular_history.w;
 #endif
 
@@ -1758,10 +1766,7 @@ FfxFloat32 size_weight           = ffxSaturate(eps_size / (GetContextInfo().casc
 
         if (specular_output.w < FfxFloat32(1.0)) 
         {    
-            if (any(isnan(specular_irradiance)))
-                specular_irradiance = FFX_BROADCAST_FLOAT32X3(0.0);
-
-             specular_output.xyz = ffxLerp(specular_irradiance.xyz, specular_output.xyz, specular_output.w);
+             specular_output.xyz= ffxLerp(specular_irradiance.xyz, specular_output.xyz, specular_output.w);
              specular_output.xyz = FfxBrixelizerGIClipAABB(specular_output.xyz, specular_irradiance.xyz, FfxFloat32(0.1));
              specular_output.w   = FfxFloat32(1.0);
         }

@@ -38,9 +38,9 @@
 // a mover index (24); then 6135470 -> 6135670 for the extra level updates: each cascade's placement (7 * 24) and the level job pointer.
 // Then 6135670 -> 6217596: the raw context it embeds grew by its pending cache updates (81923), and the mover records' pointer. Then
 // -> 6217674: the raw context's cache slot state (73) and FfxBrixelizerOverflowCounters (5).
-// Then -> 3010150: the instance tables, the invalidations, the scratch space and the baked jobs on the heap; the raw context
-// (3006054) and some 4000 uint32s of headroom for the rest, which ffx_brixelizer.cpp asserts is enough.
-#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(3010150)
+// Then -> 300096: the instance tables, the invalidations, the scratch space and the baked jobs on the heap, the raw context's
+// tables too; the raw context (296000) and some 4000 uint32s of headroom for the rest, which ffx_brixelizer.cpp asserts is enough.
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(300096)
 
 /// The size of the update description specified in 32bit values.
 ///

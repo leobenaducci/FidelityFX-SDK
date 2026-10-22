@@ -174,9 +174,11 @@ typedef struct FfxBrixelizerRawContext_Private
     BufferBindingInfo       uavInfo[FFX_BRIXELIZER_RESOURCE_IDENTIFIER_COUNT];
     FfxBrixelizerCascade_Private    cascades[FFX_BRIXELIZER_MAX_CASCADES];
     FfxResourceInternal     resources[FFX_BRIXELIZER_RESOURCE_IDENTIFIER_COUNT];
-    FfxBrixelizerBrixelizationJob   jobs[FFX_BRIXELIZER_MAX_INSTANCES];
+    // vkfw patch: this and the other per-instance tables below are on the heap (FFX_BRIXELIZER_MAX_INSTANCES each, made by brixelizerCreate),
+    // so that the context is not 12 MB measured to the byte.
+    FfxBrixelizerBrixelizationJob*  jobs;
     FfxConstantBuffer       constantBuffers[4];
-    uint32_t                indexOffsets[FFX_BRIXELIZER_MAX_INSTANCES];
+    uint32_t*               indexOffsets;
     FfxGpuJobDescription    gpuJobDescription;
     uint8_t*                uploadBufferMappedPointers[FFX_BRIXELIZER_NUM_UPLOAD_BUFFERS];
     uint32_t                uploadBufferOffsets[FFX_BRIXELIZER_NUM_UPLOAD_BUFFERS];
@@ -191,20 +193,20 @@ typedef struct FfxBrixelizerRawContext_Private
     FfxBoolean              doInit;
     
     uint32_t                numInstances;
-    FfxBrixelizerInstanceInfo       hostInstances[FFX_BRIXELIZER_MAX_INSTANCES];
-    FfxFloat32x3x4                  hostTransforms[FFX_BRIXELIZER_MAX_INSTANCES];
-    FfxBrixelizerInstanceID         hostFreelist[FFX_BRIXELIZER_MAX_INSTANCES];
+    FfxBrixelizerInstanceInfo*      hostInstances;
+    FfxFloat32x3x4*                 hostTransforms;
+    FfxBrixelizerInstanceID*        hostFreelist;
     uint32_t                hostFreelistSize;
-    FfxBrixelizerInstanceID         hostNewInstanceList[FFX_BRIXELIZER_MAX_INSTANCES];
+    FfxBrixelizerInstanceID*        hostNewInstanceList;
     uint32_t                hostNewInstanceListSize;
-    uint32_t                        bufferIndexFreeList[FFX_BRIXELIZER_MAX_INSTANCES];
+    uint32_t*                       bufferIndexFreeList;
     uint32_t                        bufferIndexFreeListSize;
     uint32_t                refCount;
     // vkfw patch: ffxBrixelizerRawContextTakeCacheUpdates: merged cascades rebuilt and mover remaps, since the last take.
     uint32_t                         pendingCacheCascadeMask;
     uint32_t                         numPendingRemaps;
     uint32_t                         numTakenRemaps;
-    FfxBrixelizerRawMoverRemap       pendingRemaps[FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS];
+    FfxBrixelizerRawMoverRemap*      pendingRemaps;       // FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS, on the heap
     // vkfw patch: ffxBrixelizerRawContextGetCacheSlotState.
     FfxBrixelizerRawCacheSlotState   cacheSlotState;
 } FfxBrixelizerContext_Private;

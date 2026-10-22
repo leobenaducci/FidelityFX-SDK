@@ -57,9 +57,9 @@
 /// The size of the raw context specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
-// vkfw patch: + the pending cache updates (ffxBrixelizerRawContextTakeCacheUpdates): 3 + 4096 remaps of 20 uint32s; + the cache slot
-// state (FfxBrixelizerRawCacheSlotState): 1 + 8 levels of 9.
-#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(3006054)
+// vkfw patch: the per-instance tables and the pending remaps are on the heap; what is left measured 1177928 bytes on x64 (294482
+// uint32s, the resource and binding tables mostly). Some headroom, which ffx_brixelizer_raw.cpp asserts is enough.
+#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(296000)
 
 #ifdef __cplusplus
 extern "C" {
