@@ -127,6 +127,18 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_SEED_FINER = (1 << 4),   ///< A new brick is seeded first from the next finer cascade's bricks inside it (their SH averaged by sample count, its radiance from theirs where each texel falls), and only without any from the coarser one.
 } FfxBrixelizerGICacheFlags;
 
+/// vkfw patch: the sizes in bytes of the GPU half of the cache slot state (FfxBrixelizerGIDispatchDescription::slotState and the three after it).
+#define FFX_BRIXELIZER_GI_SLOT_STATE_SIZE       (16 * sizeof(uint32_t))
+#define FFX_BRIXELIZER_GI_SLOT_CLAIM_SIZE       (FFX_BRIXELIZER_MAX_BRICKS * sizeof(uint32_t))
+#define FFX_BRIXELIZER_GI_SLOT_FREE_LIST_SIZE   (FFX_BRIXELIZER_MAX_BRICKS * sizeof(uint32_t))
+#define FFX_BRIXELIZER_GI_LEVEL_SLOT_MAPS_SIZE  (FFX_BRIXELIZER_RAW_CACHE_SLOT_LEVELS * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * sizeof(uint32_t))
+
+/// vkfw patch: movers (the application's and the SDK's remaps) a level's slot passes had no room for (FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS a level),
+/// counted since the context's creation: their bricks keep their voxel's slot or take a new one.
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerGIGetDroppedMovers(FfxBrixelizerGIContext* context, uint32_t* outDropped);
+
 /// vkfw patch: what FfxBrixelizerGIDispatchDescription::cacheFeed holds, an entry each: 88 bytes, std430, no padding.
 ///
 /// sh is the brick cache's own form (the irradiance SH Brixelizer GI keeps per brick, FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE's bricksSH):
@@ -210,6 +222,10 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource bricksSHState;              ///< With FFX_BRIXELIZER_GI_FLAG_EXTERNAL_BRICK_CACHE: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32x4.
     FfxResource brickSlotMap;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: FFX_BRIXELIZER_MAX_BRICKS FfxUInt32, the slot (an index into the three caches above and the radiance cache's atlas, as a brick's own index would be) a brick's cache is in, or 0xffffffff for none. Written by the context.
     FfxResource slotCounters;               ///< With FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: 64 FfxUInt32, zeroed by the application before each dispatch with an updatedCascadeMask; the context counts into it (the first 32 are statistics: see ffx_brixelizergi_cache_slots.h).
+    FfxResource slotState;                  ///< vkfw patch: with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS, the GPU half of the cache slot state (the host half is the Brixelizer context's, FfxBrixelizerRawCacheSlotState): FFX_BRIXELIZER_GI_SLOT_STATE_SIZE bytes, the free list's head and counts.
+    FfxResource slotClaim;                  ///< vkfw patch: FFX_BRIXELIZER_GI_SLOT_CLAIM_SIZE bytes, each slot's claim in the last bake.
+    FfxResource slotFreeList;               ///< vkfw patch: FFX_BRIXELIZER_GI_SLOT_FREE_LIST_SIZE bytes, the free slots.
+    FfxResource levelSlotMaps;              ///< vkfw patch: FFX_BRIXELIZER_GI_LEVEL_SLOT_MAPS_SIZE bytes, each merged cascade's slot per voxel. The four persist across dispatches and GI contexts: zeroed by the application when first handed in, and whenever it starts the cache over (with brickSlotMap filled with 0xffffffff and the host half zeroed).
 
     /// vkfw patch: optional, a R16G16B16A16_FLOAT UAV of ffxBrixelizerGIGetInternalSize() whose .x receives the sky visibility the screen probes'
     /// rays saw, as 0 to 1 (1 = open sky) for the surface under each pixel; .w is 1. Leave it null (its FfxResource zero-initialised) to skip the

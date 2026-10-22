@@ -205,4 +205,6 @@ typedef struct FfxBrixelizerRawContext_Private
     uint32_t                         numPendingRemaps;
     uint32_t                         numTakenRemaps;
     FfxBrixelizerRawMoverRemap       pendingRemaps[FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS];
+    // vkfw patch: ffxBrixelizerRawContextGetCacheSlotState.
+    FfxBrixelizerRawCacheSlotState   cacheSlotState;
 } FfxBrixelizerContext_Private;

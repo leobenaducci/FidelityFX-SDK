@@ -830,7 +830,9 @@ void FfxBrixelizerGIReprojectScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
 
             FfxFloat32x4 stat = FfxBrixelizerGILDS_LoadRadiance(FfxInt32x2(0, 0));
 
-            if (resolved_history.w < FfxFloat32(1.0e-1))
+            // vkfw patch: an empty cell is one no sample reached (.w 0), as the LDS store above has it; the stock 0.1 also took a hit nearer
+            // than 0.1 m for empty, which t_min at 1 m never produced and a low t_min (the AO's near hits) does.
+            if (resolved_history.w < FfxFloat32(1.0e-3))
                 resolved_history = stat.xyzw / ffxMax(FfxFloat32(1.0e-3), stat.w);
 
             StoreStaticScreenProbes(tid, resolved_history);
@@ -992,8 +994,16 @@ void FfxBrixelizerGIFillScreenProbes(FfxUInt32x2 tid)
     if (ffxAsUInt32(history.w) == FfxUInt32(0))
         temporal_blend = FfxFloat32(1.0);
 
+    // vkfw patch: with the sky visibility / world AO target, .w keeps this trace's own hit distance rather than the blend. A texel's ray
+    // turns every frame, so a blend of a 0.3 m hit with the misses before it (128 m) lands far beyond the AO's reach: the AO from it read
+    // white (0.988 on the diorama with t_min at 0.1). The probe's per-frame mean of the fresh distances, and its own temporal lerp of
+    // that (FfxBrixelizerGIProjectScreenProbes), do the averaging; the reprojection, which takes .w for the distance to a hit, gets a
+    // real one.
+    const FfxFloat32 fresh_distance = radiance.w;
     radiance.xyzw = ffxLerp(history.xyzw, radiance.xyzw, temporal_blend);
-    
+    if (GetSkyVisibilityEnabled() != 0u)
+        radiance.w = fresh_distance;
+
     FfxFloat32x4 stat = LoadStaticScreenProbesStat(probe_coord);
 
     if (any(FFX_NOT_EQUAL(ffxAsUInt32(stat), FFX_BROADCAST_UINT32X4(0))))
@@ -1097,8 +1107,8 @@ void FfxBrixelizerGIProjectScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
 
     // vkfw patch: with a sky visibility target, the .w of the coefficients (a 1.0 nothing reads otherwise) carries the probe's sky visibility:
     // the cosine-weighted mean over its 64 texels of v, 1 where the texel's ray escaped and 0 where it hit. A texel whose history is all
-    // misses holds the miss distance, a hit holds its distance (below t_max); a mix of the two, from reprojection or the 1/4 blend, lands
-    // between and reads as partly open, leaning towards occluded. The LDS sum below adds c * v in coefficient 0's .w and c in coefficient
+    // misses holds the miss distance, a hit holds its distance (below t_max); a mix of the two, from reprojection (the fill keeps each
+    // trace's own distance, not its 1/4 blend), lands between and reads as partly open, leaning towards occluded. The LDS sum below adds c * v in coefficient 0's .w and c in coefficient
     // 1's. The mean is a plain scalar rather than an SH of v: the interpolation reads it at the probe's own normal (its weights all but
     // require the pixel's normal to match), and an L2 SH of a hemisphere-only function reconstructed through the clamped cosine both
     // weights it by cos^2 and smears it, which read 0.16 brighter than the mean on the diorama and halved its correlation with the SDF probes.

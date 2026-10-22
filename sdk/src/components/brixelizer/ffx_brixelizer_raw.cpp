@@ -2154,6 +2154,11 @@ FfxErrorCode ffxBrixelizerRawContextUpdateInstances(FfxBrixelizerRawContext* unc
     return FFX_OK;
 }
 
+FfxBrixelizerRawCacheSlotState* ffxBrixelizerRawContextGetCacheSlotState(FfxBrixelizerRawContext* uncastContext)
+{
+    return uncastContext ? &((FfxBrixelizerRawContext_Private*)uncastContext)->cacheSlotState : NULL;
+}
+
 FfxErrorCode ffxBrixelizerRawContextTakeCacheUpdates(FfxBrixelizerRawContext* uncastContext, uint32_t* outCascadeMask, const FfxBrixelizerRawMoverRemap** outRemaps, uint32_t* outNumRemaps)
 {
     FFX_RETURN_ON_ERROR(uncastContext && outCascadeMask && outRemaps && outNumRemaps, FFX_ERROR_INVALID_POINTER);
@@ -2168,8 +2173,11 @@ FfxErrorCode ffxBrixelizerRawContextTakeCacheUpdates(FfxBrixelizerRawContext* un
     return FFX_OK;
 }
 
-FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* uncastContext, uint32_t cascadeIndex, const FfxBrixelizerRawMoverRemap* remaps, uint32_t numRemaps)
+FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* uncastContext, uint32_t cascadeIndex, const FfxBrixelizerRawMoverRemap* remaps, uint32_t numRemaps,
+                                                   uint32_t* outDropped)
 {
+    if (outDropped)
+        *outDropped = 0;
     FFX_RETURN_ON_ERROR(uncastContext, FFX_ERROR_INVALID_POINTER);
     FFX_RETURN_ON_ERROR(cascadeIndex < FFX_BRIXELIZER_MAX_CASCADES, FFX_ERROR_INVALID_ARGUMENT);
     FfxBrixelizerRawContext_Private* context = (FfxBrixelizerRawContext_Private*)(uncastContext);
@@ -2203,8 +2211,11 @@ FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* unca
             memcpy(existing->boundsMax, remaps[i].boundsMax, sizeof(existing->boundsMax));
             continue;
         }
-        if (context->numPendingRemaps >= FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS)
+        if (context->numPendingRemaps >= FFX_BRIXELIZER_RAW_MAX_PENDING_REMAPS) {
+            if (outDropped)
+                ++*outDropped;
             continue;
+        }
         context->pendingRemaps[context->numPendingRemaps] = remaps[i];
         context->pendingRemaps[context->numPendingRemaps].cascadeIndex = cascadeIndex;
         ++context->numPendingRemaps;

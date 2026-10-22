@@ -36,8 +36,9 @@
 // time rather than as a buffer overrun at run time.
 // vkfw patch: 6069910 -> 6135470 for the mover cascades: FfxBrixelizerInstance gains a uint32 (65536) and FfxBrixelizerCascadePrivate
 // a mover index (24); then 6135470 -> 6135670 for the extra level updates: each cascade's placement (7 * 24) and the level job pointer.
-// Then 6135670 -> 6217596: the raw context it embeds grew by its pending cache updates (81923), and the mover records' pointer.
-#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6217596)
+// Then 6135670 -> 6217596: the raw context it embeds grew by its pending cache updates (81923), and the mover records' pointer. Then
+// -> 6217674: the raw context's cache slot state (73) and FfxBrixelizerOverflowCounters (5).
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6217674)
 
 /// The size of the update description specified in 32bit values.
 ///
@@ -406,6 +407,24 @@ FFX_API FfxErrorCode ffxBrixelizerUpdateInstanceTransforms(FfxBrixelizerContext*
 ///
 /// @ingroup ffxBrixelizer
 FFX_API FfxErrorCode ffxBrixelizerSetInstanceCascadeRange(FfxBrixelizerContext* context, FfxBrixelizerInstanceID instanceID, uint32_t minCascade, uint32_t maxCascade);
+
+/// vkfw patch: what the context's fixed-size tables could not hold, counted since its creation. Each is handled without corrupting anything,
+/// but each costs quality: a merged invalidation rebuilds more than it needs, a dropped job or remap leaves a brick stale or uncarried.
+///
+/// @ingroup ffxBrixelizer
+typedef struct FfxBrixelizerOverflowCounters
+{
+    uint32_t invalidationsMerged;      ///< invalidations folded into the last one because FFX_BRIXELIZER_MAX_INSTANCES were pending
+    uint32_t moverRecordsUnavailable;  ///< movers made without a record (FFX_BRIXELIZER_MAX_MOVER_RECORDS in use): their moves carry no cache
+    uint32_t levelJobsDropped;         ///< jobs an extra level update had no room for (twice FFX_BRIXELIZER_MAX_INSTANCES)
+    uint32_t extraLevelsDropped;       ///< extra level updates (extraLevelMask) past the budget of cascade updates an update
+    uint32_t remapsDropped;            ///< mover remaps past the pending table (ffxBrixelizerRawContextTakeCacheUpdates) before a GI took them
+} FfxBrixelizerOverflowCounters;
+
+/// vkfw patch: the context's FfxBrixelizerOverflowCounters.
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxErrorCode ffxBrixelizerGetOverflowCounters(FfxBrixelizerContext* context, FfxBrixelizerOverflowCounters* outCounters);
 
 /// vkfw patch: the levels whose static cascade has invalidations pending (bit L for level L).
 ///

@@ -143,6 +143,8 @@ typedef struct FfxBrixelizerContext_Private {
     uint32_t*                        freeMoverRecords;
     uint32_t                         numFreeMoverRecords;
     FfxBrixelizerRawMoverRemap*      remapScratch;
+    // vkfw patch: ffxBrixelizerGetOverflowCounters.
+    FfxBrixelizerOverflowCounters    overflow;
 } FfxBrixelizerContext_Private;
 
 // vkfw patch: what a mover's transform was the last time each level rebuilt it, so that the next rebuild can tell the caches how far it moved.
@@ -221,7 +223,9 @@ static void recordLevelCacheUpdate(FfxBrixelizerContext_Private* context, uint32
         memcpy(baked, current, 12 * sizeof(float));
         record->bakedLevelMask |= 1u << level;
     }
-    ffxBrixelizerRawContextAddCacheUpdate(&context->context, context->cascades[level].mergedIndex, context->remapScratch, numRemaps);
+    uint32_t dropped = 0;
+    ffxBrixelizerRawContextAddCacheUpdate(&context->context, context->cascades[level].mergedIndex, context->remapScratch, numRemaps, &dropped);
+    context->overflow.remapsDropped += dropped;
 }
 
 // vkfw patch: the jobs of one source cascade of a level, for an extra update (extraLevelMask), as the scheduled update's are made in
@@ -233,7 +237,10 @@ static uint32_t buildLevelJobs(FfxBrixelizerContext_Private* context, uint32_t l
     const FfxBrixelizerCascadeFlag flags = context->cascades[level].flags;
     uint32_t numJobs = 0;
     const auto addInstance = [&](const FfxBrixelizerInstance *instance) {
-        if (numJobs >= FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY) return;
+        if (numJobs >= FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY) {
+            ++context->overflow.levelJobsDropped;
+            return;
+        }
         FfxBrixelizerRawJobDescription job = {};
         ifor (3) {
             job.aabbMin[i] = instance->aabb.min[i];
@@ -255,7 +262,9 @@ static uint32_t buildLevelJobs(FfxBrixelizerContext_Private* context, uint32_t l
         while (curInvalidation < context->numInvalidations) {
             FfxBrixelizerInvalidation *invalidation = &context->invalidations[curInvalidation];
             if (invalidation->cascades & cascadeMask) {
-                if (aabbsOverlap(invalidation->aabb, cascadeAABB) && numJobs < FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY) {
+                if (aabbsOverlap(invalidation->aabb, cascadeAABB) && numJobs >= FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY) {
+                    ++context->overflow.levelJobsDropped;
+                } else if (aabbsOverlap(invalidation->aabb, cascadeAABB)) {
                     FfxBrixelizerRawJobDescription job = {};
                     ifor (3) {
                         job.aabbMin[i] = invalidation->aabb.min[i];
@@ -323,7 +332,7 @@ static uint32_t countSources(FfxBrixelizerCascadeFlag flags)
 
 // vkfw patch: the extra levels (and of them the static ones) this update can afford: their mover and dynamic cascades first, every level
 // that asks, then their static cascades, finest first, while FFX_BRIXELIZER_MAX_CASCADE_UPDATES_PER_UPDATE allows.
-static void extraLevels(const FfxBrixelizerContext_Private* context, uint32_t mask, uint32_t staticMask, uint32_t scheduledLevel,
+static void extraLevels(FfxBrixelizerContext_Private* context, uint32_t mask, uint32_t staticMask, uint32_t scheduledLevel,
                         uint32_t* outLevels, uint32_t* outStaticLevels)
 {
     uint32_t budget = FFX_BRIXELIZER_MAX_CASCADE_UPDATES_PER_UPDATE - countSources(context->cascades[scheduledLevel].flags);
@@ -333,15 +342,21 @@ static void extraLevels(const FfxBrixelizerContext_Private* context, uint32_t ma
         if (!(mask & (1u << i)) || i == scheduledLevel || !level->placed)
             continue;
         const uint32_t cost = countSources(FfxBrixelizerCascadeFlag(level->flags & (FFX_BRIXELIZER_CASCADE_MOVER | FFX_BRIXELIZER_CASCADE_DYNAMIC)));
-        if (cost > budget)
+        if (cost > budget) {
+            ++context->overflow.extraLevelsDropped;
             continue;
+        }
         budget -= cost;
         levels |= 1u << i;
     }
     ifor (context->numCascades) {
         const FfxBrixelizerCascadePrivate *level = &context->cascades[i];
-        if (!(staticMask & mask & (1u << i)) || i == scheduledLevel || !level->placed || !(level->flags & FFX_BRIXELIZER_CASCADE_STATIC) || budget == 0)
+        if (!(staticMask & mask & (1u << i)) || i == scheduledLevel || !level->placed || !(level->flags & FFX_BRIXELIZER_CASCADE_STATIC))
             continue;
+        if (budget == 0) {
+            ++context->overflow.extraLevelsDropped;
+            continue;
+        }
         --budget;
         levels |= 1u << i;
         staticLevels |= 1u << i;
@@ -925,7 +940,18 @@ static void addInvalidationJob(FfxBrixelizerContext_Private* context, FfxBrixeli
     invalidation.cascades = cascadesMask;
     invalidation.aabb = aabb;
 
-    FFX_ASSERT(context->numInvalidations < FFX_ARRAY_ELEMENTS(context->invalidations));
+    // vkfw patch: a full table folds the new one into the last (the union of their boxes and levels): it rebuilds more, but writing past the
+    // table, as the assert alone let it in release, overwrote numStaticInstances and instanceIndices.
+    if (context->numInvalidations >= FFX_ARRAY_ELEMENTS(context->invalidations)) {
+        FfxBrixelizerInvalidation *last = &context->invalidations[context->numInvalidations - 1];
+        ifor (3) {
+            last->aabb.min[i] = last->aabb.min[i] < aabb.min[i] ? last->aabb.min[i] : aabb.min[i];
+            last->aabb.max[i] = last->aabb.max[i] > aabb.max[i] ? last->aabb.max[i] : aabb.max[i];
+        }
+        last->cascades |= invalidation.cascades;
+        ++context->overflow.invalidationsMerged;
+        return;
+    }
     context->invalidations[context->numInvalidations++] = invalidation;
 }
 
@@ -998,6 +1024,9 @@ FfxErrorCode ffxBrixelizerCreateInstances(FfxBrixelizerContext* uncastContext, c
             context->instanceIndices[instanceID] = instanceIndex;
 
             // vkfw patch: a mover's record (none past FFX_BRIXELIZER_MAX_MOVER_RECORDS: its moves then carry no cache).
+            if (instance->isMover && context->numFreeMoverRecords == 0) {
+                ++context->overflow.moverRecordsUnavailable;
+            }
             if (instance->isMover && context->numFreeMoverRecords > 0) {
                 const uint32_t recordIndex = context->freeMoverRecords[--context->numFreeMoverRecords];
                 FfxBrixelizerMoverRecord *record = &context->moverRecords[recordIndex];
@@ -1107,6 +1136,13 @@ FfxErrorCode ffxBrixelizerSetInstanceCascadeRange(FfxBrixelizerContext* uncastCo
     }
     instance->minCascade = minCascade;
     instance->maxCascade = maxCascade;
+    return FFX_OK;
+}
+
+FfxErrorCode ffxBrixelizerGetOverflowCounters(FfxBrixelizerContext* uncastContext, FfxBrixelizerOverflowCounters* outCounters)
+{
+    FFX_RETURN_ON_ERROR(uncastContext && outCounters, FFX_ERROR_INVALID_POINTER);
+    *outCounters = ((const FfxBrixelizerContext_Private*)uncastContext)->overflow;
     return FFX_OK;
 }
 

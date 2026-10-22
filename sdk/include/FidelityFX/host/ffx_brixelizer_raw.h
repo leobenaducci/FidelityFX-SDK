@@ -57,8 +57,9 @@
 /// The size of the raw context specified in 32bit values.
 ///
 /// @ingroup ffxBrixelizer
-// vkfw patch: + the pending cache updates (ffxBrixelizerRawContextTakeCacheUpdates): 3 + 4096 remaps of 20 uint32s.
-#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(3005981)
+// vkfw patch: + the pending cache updates (ffxBrixelizerRawContextTakeCacheUpdates): 3 + 4096 remaps of 20 uint32s; + the cache slot
+// state (FfxBrixelizerRawCacheSlotState): 1 + 8 levels of 9.
+#define FFX_BRIXELIZER_RAW_CONTEXT_SIZE FFX_PLATFORM_CONTEXT_SIZE(3006054)
 
 #ifdef __cplusplus
 extern "C" {
@@ -640,10 +641,37 @@ typedef struct FfxBrixelizerRawMoverRemap
 /// @ingroup ffxBrixelizer
 FFX_API FfxErrorCode ffxBrixelizerRawContextTakeCacheUpdates(FfxBrixelizerRawContext* context, uint32_t* outCascadeMask, const FfxBrixelizerRawMoverRemap** outRemaps, uint32_t* outNumRemaps);
 
+/// vkfw patch: how many merged cascades (levels, from Brixelizer GI's startCascade) the cache slot state covers.
+#define FFX_BRIXELIZER_RAW_CACHE_SLOT_LEVELS 8
+
+/// vkfw patch: the host half of Brixelizer GI's cache slot state (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS), kept here, beside the SDF it indexes,
+/// so that every GI context on this context hands out the same slots and a GI context made anew carries on where the last one stopped. The
+/// GPU half is the application's (FfxBrixelizerGIDispatchDescription::slotState and the buffers after it). Brixelizer GI reads and writes it;
+/// the application leaves it alone, except to zero it (with the GPU half) when it starts the cache over.
+///
+/// @ingroup ffxBrixelizer
+typedef struct FfxBrixelizerRawCacheSlotState
+{
+    uint32_t claimTag;             ///< Counts the slot passes' bakes: each slot's claim in the GPU half is tagged with it.
+    struct
+    {
+        uint32_t valid;            ///< Whether the level's slot map holds a bake.
+        float    gridMin[3];       ///< The merged cascade as its slot map holds it: placed as when the slot passes last ran for it.
+        float    voxelSize;
+        uint32_t clipmapOffset[3];
+    } levels[FFX_BRIXELIZER_RAW_CACHE_SLOT_LEVELS];
+} FfxBrixelizerRawCacheSlotState;
+
+/// vkfw patch: the context's FfxBrixelizerRawCacheSlotState (zeroed with the context).
+///
+/// @ingroup ffxBrixelizer
+FFX_API FfxBrixelizerRawCacheSlotState* ffxBrixelizerRawContextGetCacheSlotState(FfxBrixelizerRawContext* context);
+
 /// vkfw patch: record a merged cascade's rebuild and its remaps for the next ffxBrixelizerRawContextTakeCacheUpdates (the high-level API does).
 ///
 /// @ingroup ffxBrixelizer
-FFX_API FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* context, uint32_t cascadeIndex, const FfxBrixelizerRawMoverRemap* remaps, uint32_t numRemaps);
+FFX_API FfxErrorCode ffxBrixelizerRawContextAddCacheUpdate(FfxBrixelizerRawContext* context, uint32_t cascadeIndex, const FfxBrixelizerRawMoverRemap* remaps, uint32_t numRemaps,
+                                                           uint32_t* outDropped);
 
 /// Register a vertex or index buffer for use with Brixelizer.
 ///

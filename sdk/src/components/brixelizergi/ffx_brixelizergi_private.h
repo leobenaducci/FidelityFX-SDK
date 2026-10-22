@@ -25,7 +25,7 @@
 #include <FidelityFX/gpu/ffx_core.h>
 #include <FidelityFX/gpu/brixelizergi/ffx_brixelizergi_host_interface.h>
 
-#define FFX_BRIXELIZER_GI_SLOT_LEVELS       8
+#define FFX_BRIXELIZER_GI_SLOT_LEVELS       FFX_BRIXELIZER_RAW_CACHE_SLOT_LEVELS
 #define FFX_BRIXELIZER_GI_SCREEN_PROBE_SIZE 8
 #define FFX_BRIXELIZER_GI_BRICK_TILE_SIZE   4
 
@@ -88,15 +88,8 @@ FfxPipelineState                   pipelineSpawnScreenProbes;
     bool                               bSkyVisibilityHistoryValid;  // vkfw patch: and whether the last dispatch wrote it
 FfxGpuJobDescription               gpuJobDescription;
     FfxConstantBuffer                  constantBuffers[FFX_BRIXELIZER_GI_CONSTANTBUFFER_IDENTIFIER_COUNT];
-    // vkfw patch: FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: this context's tag for the claims of a bake, and each merged cascade as the slot maps hold it
-    // (as the cascade was placed the last time the passes ran for it).
-    uint32_t                           slotClaimTag;
-    struct SlotLevel
-    {
-        FfxBoolean valid;
-        float      gridMin[3];
-        float      voxelSize;
-        uint32_t   clipmapOffset[3];
-    } slotLevels[FFX_BRIXELIZER_GI_SLOT_LEVELS];
-    FfxBrixelizerGISlotConstants       slotConstants;   // staged from here: 40 KB
+    // vkfw patch: FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: the slot state is the Brixelizer context's (FfxBrixelizerRawCacheSlotState) and the
+    // application's buffers, not this context's: see brixelizerGIScheduleSlots.
+    FfxBrixelizerGISlotConstants       slotConstants;// staged from here: 40 KB
+    uint32_t                           droppedMovers;   // ffxBrixelizerGIGetDroppedMovers
 } FfxBrixelizerGIContext_Private;
