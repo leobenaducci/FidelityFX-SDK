@@ -24,6 +24,8 @@
 #include "ffx_brixelizergi_probe_shading.h"
 
 #define FFX_BRIXELIZER_GI_SLOT_INVALID 0xffffffffu
+// vkfw patch: the empty-brick list's count stops here (FfxBrixelizerGIDispatchDescription::emptyBricks), so it never wraps.
+#define FFX_BRIXELIZER_GI_EMPTY_BRICKS_COUNT_CAP 0x80000000u
 
 #define FFX_BRIXELIZER_GI_SLOT_VOXELS (FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION)
 
@@ -753,8 +755,10 @@ void FfxBrixelizerGISlotsStats(FfxUInt32 tid)
     const FfxUInt32  slot    = BrickSlotMapLoad(FfxBrixelizerBrickGetIndex(brick));
     const FfxFloat32 samples = slot == FFX_BRIXELIZER_GI_SLOT_INVALID ? FfxFloat32(0.0) : ffxUnpackF32x2(LoadBricksSH(slot * 9u)).w;
 
-    // vkfw patch: the empty-brick list (FfxBrixelizerGIEmptyBrick, 8 uints after a 4-uint header).
-    if (GetSlotConstants().empty_max != 0u && !(samples >= GetSlotConstants().empty_threshold))
+    // vkfw patch: the empty-brick list (FfxBrixelizerGIEmptyBrick, 8 uints after a 4-uint header). Its count stops at about
+    // FFX_BRIXELIZER_GI_EMPTY_BRICKS_COUNT_CAP (the threads already past the check still add), so a list accumulated and never taken
+    // does not wrap back over its entries.
+    if (GetSlotConstants().empty_max != 0u && !(samples >= GetSlotConstants().empty_threshold) && EmptyBricksLoad(0u) < FFX_BRIXELIZER_GI_EMPTY_BRICKS_COUNT_CAP)
     {
         const FfxUInt32 entry = EmptyBricksAdd(1u);
         if (entry < GetSlotConstants().empty_max)

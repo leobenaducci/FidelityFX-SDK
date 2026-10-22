@@ -278,7 +278,7 @@ typedef struct FfxBrixelizerGIDispatchDescription
     /// vkfw patch, optional (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS): the bricks the cache feed should fill. A buffer of 16 bytes of header (the
     /// count, then 3 uint32s of padding) and maxEmptyBricks FfxBrixelizerGIEmptyBrick; whenever a dispatch rebuilds levels (updatedCascadeMask,
     /// the SDK's own rebuilds) it is started over (unless FFX_BRIXELIZER_GI_CACHE_EMPTY_ACCUMULATE) and every brick of those levels with fewer than cacheSettings.emptyBrickMaxSamples samples (or no cache
-    /// slot) is listed. The count may exceed maxEmptyBricks (the entries past it are dropped). Read it a frame later, trace or probe those
+    /// slot) is listed. The count may exceed maxEmptyBricks (the entries past it are dropped); it stops at about 2^31. Read it a frame later, trace or probe those
     /// places, and feed them back (cacheFeed, FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY).
     FfxResource emptyBricks;
     uint32_t    maxEmptyBricks;

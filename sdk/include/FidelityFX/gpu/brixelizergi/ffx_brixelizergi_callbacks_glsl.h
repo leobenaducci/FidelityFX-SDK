@@ -588,6 +588,7 @@ FfxBrixelizerCascadeInfo GetCascadeInfoNonUniform(FfxUInt32 cascadeID)
 #if defined BRIXELIZER_GI_BIND_UAV_EMPTY_BRICKS
     layout (set = 0, binding = BRIXELIZER_GI_BIND_UAV_EMPTY_BRICKS, std430) coherent buffer BrixelizerGIEmptyBricks_t { FfxUInt32 data[]; } g_rw_empty_bricks;
     FfxUInt32 EmptyBricksAdd(FfxUInt32 value) { return atomicAdd(g_rw_empty_bricks.data[0], value); }
+    FfxUInt32 EmptyBricksLoad(FfxUInt32 index) { return g_rw_empty_bricks.data[index]; }
     void EmptyBricksStore(FfxUInt32 index, FfxUInt32 value) { g_rw_empty_bricks.data[index] = value; }
 #endif
 #if defined BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS
