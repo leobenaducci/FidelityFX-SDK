@@ -126,6 +126,7 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC = (1 << 3), ///< A static brick in a mover's bounds keeps its voxel's slot: level L's static cascade is raw cascade L (ffxBrixelizerGetCascadeIndices' layout, with a static cascade at every level).
     FFX_BRIXELIZER_GI_CACHE_SEED_FINER = (1 << 4),   ///<A new brick is seeded first from the next finer cascade's bricks inside it (their SH averaged by sample count, its radiance from theirs where each texel falls), and only without any from the coarser one.
     FFX_BRIXELIZER_GI_CACHE_STATS = (1 << 5),        ///< Run the statistics pass after the slot passes: the brick count and the sample histogram in slotCounters (FFX_BRIXELIZER_GI_SLOT_COUNTER_BRICKS, _HISTOGRAM). The other counters are kept either way.
+    FFX_BRIXELIZER_GI_CACHE_EMPTY_ACCUMULATE = (1 << 6),        ///< The empty-brick list (emptyBricks) is never started over by the GI: it gathers every rebuild's empty bricks (a brick once a rebuild, so one on a level rebuilt twice is listed twice) until the application, having read it, zeroes its count.
 } FfxBrixelizerGICacheFlags;
 
 /// vkfw patch: how the world cache is kept (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS), in one place: FfxBrixelizerGIDispatchDescription::cacheSettings.
@@ -276,7 +277,7 @@ typedef struct FfxBrixelizerGIDispatchDescription
     uint32_t    cacheFeedFlags;             ///< FfxBrixelizerGICacheFeedFlags (the sample cap: cacheSettings.feedMaxSamples)
     /// vkfw patch, optional (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS): the bricks the cache feed should fill. A buffer of 16 bytes of header (the
     /// count, then 3 uint32s of padding) and maxEmptyBricks FfxBrixelizerGIEmptyBrick; whenever a dispatch rebuilds levels (updatedCascadeMask,
-    /// the SDK's own rebuilds) it is started over and every brick of those levels with fewer than cacheSettings.emptyBrickMaxSamples samples (or no cache
+    /// the SDK's own rebuilds) it is started over (unless FFX_BRIXELIZER_GI_CACHE_EMPTY_ACCUMULATE) and every brick of those levels with fewer than cacheSettings.emptyBrickMaxSamples samples (or no cache
     /// slot) is listed. The count may exceed maxEmptyBricks (the entries past it are dropped). Read it a frame later, trace or probe those
     /// places, and feed them back (cacheFeed, FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY).
     FfxResource emptyBricks;
