@@ -38,7 +38,9 @@
 // a mover index (24); then 6135470 -> 6135670 for the extra level updates: each cascade's placement (7 * 24) and the level job pointer.
 // Then 6135670 -> 6217596: the raw context it embeds grew by its pending cache updates (81923), and the mover records' pointer. Then
 // -> 6217674: the raw context's cache slot state (73) and FfxBrixelizerOverflowCounters (5).
-#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(6217674)
+// Then -> 3010150: the instance tables, the invalidations, the scratch space and the baked jobs on the heap; the raw context
+// (3006054) and some 4000 uint32s of headroom for the rest, which ffx_brixelizer.cpp asserts is enough.
+#define FFX_BRIXELIZER_CONTEXT_SIZE            FFX_PLATFORM_CONTEXT_SIZE(3010150)
 
 /// The size of the update description specified in 32bit values.
 ///
@@ -46,11 +48,13 @@
 #if defined(_WIN32)
 // vkfw patch: + numMoverJobs and moverJobs[2 * FFX_BRIXELIZER_MAX_INSTANCES] (the static jobs' bound, of which movers need half) (1 + 131072 * 8 uint32s, and 1 of padding: measured 12591816 bytes),
 // then extraLevelMask and extraStaticLevelMask (2).
-#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 3147956
+// vkfw patch, later: the jobs are the context's (on the heap), the description a header (8944 bytes on x64: its resources
+// and cascade update description): 4096 uint32s, asserted to be enough.
+#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 4096
 #else
 // vkfw patch: the same private struct under the LP64 ABI (measured with GCC on x86-64 Linux);
 // ffx_brixelizer.cpp asserts the two sizes are equal.
-#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 3149556
+#define FFX_BRIXELIZER_UPDATE_DESCRIPTION_SIZE 4096
 #endif
 
 #ifdef __cplusplus
@@ -303,6 +307,7 @@ FFX_API FfxErrorCode ffxBrixelizerGetContextInfo(FfxBrixelizerContext* context, 
 
 /// Build an <c><i>FfxBrixelizerBakedUpdateDescription</i></c> struct from an <c><i>FfxBrixelizerUpdateDescription</i></c> struct
 /// for use in doing a Brixelizer update.
+/// vkfw patch: the description's jobs are kept by the context, so a baked description is valid until the context's next bake.
 ///
 /// @param [inout] context        An <c><i>FfxBrixelizerContext</i></c> containing the Brixelizer context.
 /// @param [in]    desc           An <c><i>FfxBrixelizerUpdateDescription</i></c> struct containing the parameters for the update.

@@ -54,19 +54,26 @@ typedef struct FfxBrixelizerBakedUpdateDescription_Private {
     FfxBrixelizerPopulateDebugAABBsFlags        populateDebugAABBsFlags;
     FfxBrixelizerStats*                         outStats;
     FfxBrixelizerDebugVisualizationDescription* debugVisualizationDesc;
+    // vkfw patch: the jobs live in the context's heap (bakedJobs), not in the description: it was 12 MB, held by the application and
+    // cleared each frame. A description is so valid only until the context's next bake.
     uint32_t                            numStaticJobs;
-    FfxBrixelizerRawJobDescription                 staticJobs[3 * FFX_BRIXELIZER_MAX_INSTANCES];
+    FfxBrixelizerRawJobDescription*                staticJobs;
     uint32_t                            numDynamicJobs;
-    FfxBrixelizerRawJobDescription                 dynamicJobs[FFX_BRIXELIZER_MAX_INSTANCES];
+    FfxBrixelizerRawJobDescription*                dynamicJobs;
     // vkfw patch: the mover cascade's jobs: its instances and its invalidations.
     uint32_t                            numMoverJobs;
-    FfxBrixelizerRawJobDescription                 moverJobs[2 * FFX_BRIXELIZER_MAX_INSTANCES];
+    FfxBrixelizerRawJobDescription*                moverJobs;
     // vkfw patch: FfxBrixelizerUpdateDescription::extraLevelMask / extraStaticLevelMask, as baked (without the scheduled level).
     uint32_t                            extraLevelMask;
     uint32_t                            extraStaticLevelMask;
 } FfxBrixelizerBakedUpdateDescription_Private;
 
-FFX_STATIC_ASSERT(sizeof(FfxBrixelizerBakedUpdateDescription) == sizeof(FfxBrixelizerBakedUpdateDescription_Private));
+FFX_STATIC_ASSERT(sizeof(FfxBrixelizerBakedUpdateDescription) >= sizeof(FfxBrixelizerBakedUpdateDescription_Private));
+
+// vkfw patch: the capacities of the baked jobs (FfxBrixelizerContext_Private::bakedJobs, in this order).
+#define FFX_BRIXELIZER_STATIC_JOBS_CAPACITY  (3 * FFX_BRIXELIZER_MAX_INSTANCES)
+#define FFX_BRIXELIZER_DYNAMIC_JOBS_CAPACITY (FFX_BRIXELIZER_MAX_INSTANCES)
+#define FFX_BRIXELIZER_MOVER_JOBS_CAPACITY   (2 * FFX_BRIXELIZER_MAX_INSTANCES)
 
 typedef struct FfxBrixelizerCascadePrivate {
     FfxBrixelizerCascadeFlag flags;
@@ -127,13 +134,17 @@ typedef struct FfxBrixelizerContext_Private {
     FfxBrixelizerRawContext     context;
     uint32_t                    numCascades;
     FfxBrixelizerCascadePrivate cascades[FFX_BRIXELIZER_MAX_CASCADES];
+    // vkfw patch: the tables below are on the heap (made with the context), FFX_BRIXELIZER_MAX_INSTANCES each, so that the context is not
+    // 25 MB measured to the byte.
     uint32_t                    numInvalidations;
-    FfxBrixelizerInvalidation   invalidations[FFX_BRIXELIZER_MAX_INSTANCES];
+    FfxBrixelizerInvalidation*  invalidations;
     uint32_t                    numStaticInstances;
     uint32_t                    dynamicInstanceStartIndex;
-    uint32_t                    instanceIndices[FFX_BRIXELIZER_MAX_INSTANCES];
-    FfxBrixelizerInstance       instances[FFX_BRIXELIZER_MAX_INSTANCES];
-    FfxBrixelizerScratchSpace   scratchSpace;
+    uint32_t*                   instanceIndices;
+    FfxBrixelizerInstance*      instances;
+    FfxBrixelizerScratchSpace*  scratchSpace;
+    // vkfw patch: the baked description's jobs: static, dynamic, then mover (FFX_BRIXELIZER_*_JOBS_CAPACITY).
+    FfxBrixelizerRawJobDescription* bakedJobs;
     // vkfw patch: the jobs of one cascade of an extra level (extraLevelMask), built as each is updated (the raw update copies them out).
     FfxBrixelizerRawJobDescription* levelJobs;
     // vkfw patch: the movers' records (FfxBrixelizerMoverRecord), the record of each instance id (FFX_BRIXELIZER_NO_MOVER_RECORD if none),
@@ -293,7 +304,7 @@ static uint32_t buildLevelJobs(FfxBrixelizerContext_Private* context, uint32_t l
         }
         break;
     case FFX_BRIXELIZER_LEVEL_SOURCE_DYNAMIC:
-        for (uint32_t i = context->dynamicInstanceStartIndex; i < FFX_ARRAY_ELEMENTS(context->instances); ++i) {
+        for (uint32_t i = context->dynamicInstanceStartIndex; i < FFX_BRIXELIZER_MAX_INSTANCES; ++i) {
             if (instanceInCascade(&context->instances[i], level))
                 addInstance(&context->instances[i]);
         }
@@ -365,6 +376,21 @@ static void extraLevels(FfxBrixelizerContext_Private* context, uint32_t mask, ui
     *outStaticLevels = staticLevels;
 }
 
+// vkfw patch: the context's heap tables, freed on destruction and on a failed creation.
+static void freeContextTables(FfxBrixelizerContext_Private* context)
+{
+    free(context->invalidations);
+    free(context->instanceIndices);
+    free(context->instances);
+    free(context->scratchSpace);
+    free(context->bakedJobs);
+    free(context->levelJobs);
+    free(context->moverRecords);
+    free(context->moverRecordOfInstance);
+    free(context->freeMoverRecords);
+    free(context->remapScratch);
+}
+
 FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* desc, FfxBrixelizerContext* uncastOutContext)
 {
     FfxBrixelizerContext_Private *outContext = (FfxBrixelizerContext_Private*)uncastOutContext;
@@ -375,7 +401,7 @@ FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* d
     rawDesc.backendInterface = desc->backendInterface;
 
     memset(outContext, 0, sizeof(*outContext));
-    outContext->dynamicInstanceStartIndex = FFX_ARRAY_ELEMENTS(outContext->instances);
+    outContext->dynamicInstanceStartIndex = FFX_BRIXELIZER_MAX_INSTANCES;
     RETURN_ON_FAIL(ffxBrixelizerRawContextCreate(&outContext->context, &rawDesc));
 
     // vkfw patch: [static][mover][dynamic][merged], each in level order, and a merged cascade for every level (ffxBrixelizerGetCascadeIndices).
@@ -422,12 +448,27 @@ FfxErrorCode ffxBrixelizerContextCreate(const FfxBrixelizerContextDescription* d
     }
 
     outContext->numCascades = desc->numCascades;
+    outContext->invalidations   = (FfxBrixelizerInvalidation*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(FfxBrixelizerInvalidation));
+    outContext->instanceIndices = (uint32_t*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(uint32_t));
+    outContext->instances       = (FfxBrixelizerInstance*)calloc(FFX_BRIXELIZER_MAX_INSTANCES, sizeof(FfxBrixelizerInstance));
+    outContext->scratchSpace    = (FfxBrixelizerScratchSpace*)calloc(1, sizeof(FfxBrixelizerScratchSpace));
+    outContext->bakedJobs       = (FfxBrixelizerRawJobDescription*)malloc((FFX_BRIXELIZER_STATIC_JOBS_CAPACITY + FFX_BRIXELIZER_DYNAMIC_JOBS_CAPACITY +
+                                                                          FFX_BRIXELIZER_MOVER_JOBS_CAPACITY) * sizeof(FfxBrixelizerRawJobDescription));
+    if (!outContext->invalidations || !outContext->instanceIndices || !outContext->instances || !outContext->scratchSpace || !outContext->bakedJobs) {
+        freeContextTables(outContext);
+        ffxBrixelizerRawContextDestroy(&outContext->context);
+        memset(outContext, 0, sizeof(*outContext));
+        return FFX_ERROR_OUT_OF_MEMORY;
+    }
     outContext->levelJobs = (FfxBrixelizerRawJobDescription*)malloc(FFX_BRIXELIZER_LEVEL_JOBS_CAPACITY * sizeof(FfxBrixelizerRawJobDescription));
     outContext->moverRecords = (FfxBrixelizerMoverRecord*)malloc(FFX_BRIXELIZER_MAX_MOVER_RECORDS * sizeof(FfxBrixelizerMoverRecord));
     outContext->moverRecordOfInstance = (uint32_t*)malloc(FFX_BRIXELIZER_MAX_INSTANCES * sizeof(uint32_t));
     outContext->freeMoverRecords = (uint32_t*)malloc(FFX_BRIXELIZER_MAX_MOVER_RECORDS * sizeof(uint32_t));
     outContext->remapScratch = (FfxBrixelizerRawMoverRemap*)malloc(FFX_BRIXELIZER_MAX_MOVER_RECORDS * sizeof(FfxBrixelizerRawMoverRemap));
     if (!outContext->levelJobs || !outContext->moverRecords || !outContext->moverRecordOfInstance || !outContext->freeMoverRecords || !outContext->remapScratch) {
+        freeContextTables(outContext);
+        ffxBrixelizerRawContextDestroy(&outContext->context);
+        memset(outContext, 0, sizeof(*outContext));
         return FFX_ERROR_OUT_OF_MEMORY;
     }
     ifor (FFX_BRIXELIZER_MAX_INSTANCES) {
@@ -450,11 +491,7 @@ FfxErrorCode ffxBrixelizerContextDestroy(FfxBrixelizerContext* uncastContext)
     if (result != FFX_OK) {
         return result;
     }
-    free(context->levelJobs);
-    free(context->moverRecords);
-    free(context->moverRecordOfInstance);
-    free(context->freeMoverRecords);
-    free(context->remapScratch);
+    freeContextTables(context);
     memset(context, 0, sizeof(*context));
     return FFX_OK;
 }
@@ -465,6 +502,10 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
     FfxBrixelizerBakedUpdateDescription_Private *outDesc = (FfxBrixelizerBakedUpdateDescription_Private*)uncastOutDesc;
 
     memset(outDesc, 0, sizeof(*outDesc));
+    // vkfw patch: the jobs go to the context's storage (every job is written whole, up to its count).
+    outDesc->staticJobs  = context->bakedJobs;
+    outDesc->dynamicJobs = outDesc->staticJobs + FFX_BRIXELIZER_STATIC_JOBS_CAPACITY;
+    outDesc->moverJobs   = outDesc->dynamicJobs + FFX_BRIXELIZER_DYNAMIC_JOBS_CAPACITY;
 
     uint32_t cascadeIndex = ffxBrixelizerRawGetCascadeToUpdate(desc->frameIndex, context->numCascades);
 
@@ -523,7 +564,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
                 job.instanceIdx = instance->id;
                 *curJob++ = job;
                 outDesc->numStaticJobs++;
-                FFX_ASSERT(outDesc->numStaticJobs <= FFX_ARRAY_ELEMENTS(outDesc->staticJobs));
+                FFX_ASSERT(outDesc->numStaticJobs <= FFX_BRIXELIZER_STATIC_JOBS_CAPACITY);
             }
         }
 
@@ -542,7 +583,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
                     job.flags = FFX_BRIXELIZER_RAW_JOB_FLAG_INVALIDATE;
                     *curJob++ = job;
                     outDesc->numStaticJobs++;
-                    FFX_ASSERT(outDesc->numStaticJobs <= FFX_ARRAY_ELEMENTS(outDesc->staticJobs));
+                    FFX_ASSERT(outDesc->numStaticJobs <= FFX_BRIXELIZER_STATIC_JOBS_CAPACITY);
                 }
                 invalidation->cascades &= ~cascadeMask;
                 if (!invalidation->cascades) {
@@ -572,7 +613,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
                 job.instanceIdx = instance->id;
                 *curJob++ = job;
                 outDesc->numMoverJobs++;
-                FFX_ASSERT(outDesc->numMoverJobs <= FFX_ARRAY_ELEMENTS(outDesc->moverJobs));
+                FFX_ASSERT(outDesc->numMoverJobs <= FFX_BRIXELIZER_MOVER_JOBS_CAPACITY);
             }
         }
 
@@ -586,7 +627,7 @@ FfxErrorCode ffxBrixelizerBakeUpdate(FfxBrixelizerContext* uncastContext, const 
         // vkfw patch: counted as they are emitted rather than assumed to be every dynamic instance,
         // because a band (FFX_BRIXELIZER_INSTANCE_FLAG_CASCADE_RANGE) can exclude this cascade.
         outDesc->numDynamicJobs = 0;
-        for (uint32_t i = context->dynamicInstanceStartIndex; i < FFX_ARRAY_ELEMENTS(context->instances); ++i) {
+        for (uint32_t i = context->dynamicInstanceStartIndex; i < FFX_BRIXELIZER_MAX_INSTANCES; ++i) {
             if (!instanceInCascade(&context->instances[i], cascadeIndex)) {
                 continue;
             }
@@ -780,7 +821,8 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
 
     ffxBrixelizerRawContextEnd(&context->context);
 
-    FfxBrixelizerInstanceID instanceIDs[FFX_BRIXELIZER_MAX_INSTANCES] = {};
+    // vkfw patch: the debug view's instance list in the scratch space, not a 256 KB array zeroed on the stack every update.
+    FfxBrixelizerInstanceID *instanceIDs = context->scratchSpace->update.instanceIDs;
     if (desc->debugVisualizationDesc) {
         FfxBrixelizerDebugVisualizationDescription debugVisDesc = *desc->debugVisualizationDesc;
         debugVisDesc.commandList = commandList;
@@ -822,12 +864,12 @@ FfxErrorCode ffxBrixelizerUpdate(FfxBrixelizerContext* uncastContext, FfxBrixeli
 
     // clear dynamic instances
     {
-        FfxBrixelizerInstanceID *instanceIDs = context->scratchSpace.update.instanceIDs;
-        for (uint32_t i = context->dynamicInstanceStartIndex, j = 0; i < FFX_ARRAY_ELEMENTS(context->instances); ++i, ++j) {
+        FfxBrixelizerInstanceID *instanceIDs = context->scratchSpace->update.instanceIDs;
+        for (uint32_t i = context->dynamicInstanceStartIndex, j = 0; i < FFX_BRIXELIZER_MAX_INSTANCES; ++i, ++j) {
             instanceIDs[j] = context->instances[i].id;
         }
-        ffxBrixelizerRawContextDestroyInstances(&context->context, instanceIDs, FFX_ARRAY_ELEMENTS(context->instances) - context->dynamicInstanceStartIndex);
-        context->dynamicInstanceStartIndex = FFX_ARRAY_ELEMENTS(context->instances);
+        ffxBrixelizerRawContextDestroyInstances(&context->context, instanceIDs, FFX_BRIXELIZER_MAX_INSTANCES - context->dynamicInstanceStartIndex);
+        context->dynamicInstanceStartIndex = FFX_BRIXELIZER_MAX_INSTANCES;
     }
 
     if (desc->outStats) {
@@ -942,7 +984,7 @@ static void addInvalidationJob(FfxBrixelizerContext_Private* context, FfxBrixeli
 
     // vkfw patch: a full table folds the new one into the last (the union of their boxes and levels): it rebuilds more, but writing past the
     // table, as the assert alone let it in release, overwrote numStaticInstances and instanceIndices.
-    if (context->numInvalidations >= FFX_ARRAY_ELEMENTS(context->invalidations)) {
+    if (context->numInvalidations >= FFX_BRIXELIZER_MAX_INSTANCES) {
         FfxBrixelizerInvalidation *last = &context->invalidations[context->numInvalidations - 1];
         ifor (3) {
             last->aabb.min[i] = last->aabb.min[i] < aabb.min[i] ? last->aabb.min[i] : aabb.min[i];
@@ -961,8 +1003,8 @@ FfxErrorCode ffxBrixelizerCreateInstances(FfxBrixelizerContext* uncastContext, c
 
     FFX_ASSERT(context->numStaticInstances + numDescs <= context->dynamicInstanceStartIndex);
 
-    FfxBrixelizerRawInstanceDescription *rawDescs = context->scratchSpace.createInstances.rawInstanceDescs;
-    FfxBrixelizerInstanceID *instanceIDs = context->scratchSpace.createInstances.instanceIDs;
+    FfxBrixelizerRawInstanceDescription *rawDescs = context->scratchSpace->createInstances.rawInstanceDescs;
+    FfxBrixelizerInstanceID *instanceIDs = context->scratchSpace->createInstances.instanceIDs;
 
     ifor (numDescs) {
         const FfxBrixelizerInstanceDescription *desc = &descs[i];

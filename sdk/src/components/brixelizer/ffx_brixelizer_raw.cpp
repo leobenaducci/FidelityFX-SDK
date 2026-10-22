@@ -1724,42 +1724,55 @@ static FfxErrorCode brixelizerDispatchDebugVisualization(FfxBrixelizerRawContext
 
 static void brixelizerFlushInstances(FfxBrixelizerRawContext_Private* context, FfxCommandList cmdList)
 {
-    for (uint32_t i = 0; i < context->hostNewInstanceListSize; i++)
+    // vkfw patch: one copy per run of consecutive instance IDs, not two per instance: the instances' records are laid out by ID, and the
+    // IDs given out together (a scene's, a body's elements, the moving bodies each frame) are mostly consecutive. Sorted and deduplicated
+    // first: an instance created and moved in the same frame is listed twice.
+    FfxBrixelizerInstanceID* ids   = context->hostNewInstanceList;
+    const uint32_t           count = context->hostNewInstanceListSize;
+    std::sort(ids, ids + count);
+    const uint32_t unique = (uint32_t)(std::unique(ids, ids + count) - ids);
+
+    constexpr uint32_t maxRun  = 4096;
+    uint32_t           pending = 0;
+    for (uint32_t i = 0; i < unique;)
     {
-        FfxBrixelizerInstanceID idx = context->hostNewInstanceList[i];
+        uint32_t end = i + 1;
+        while (end < unique && end - i < maxRun && ids[end] == ids[end - 1] + 1)
+            ++end;
+        const FfxBrixelizerInstanceID first = ids[i];
+        const uint32_t                run   = end - i;
+        i = end;
 
-        FfxBrixelizerInstanceInfo instanceInfo = getFlatInstancePtr(context)[idx];
-        FfxFloat32x3x4 transform;
-        memcpy(&transform, getFlatTransformPtr(context) + idx, sizeof(transform));
-
-        // Copy into mapped pointer of staging buffer
-        uint32_t instanceInfoOffset =
-            copyToUploadBuffer(context, FFX_BRIXELIZER_RESOURCE_IDENTIFIER_UPLOAD_INSTANCE_INFO_BUFFER, &instanceInfo, sizeof(instanceInfo));
-        uint32_t instanceTransformOffset =
-            copyToUploadBuffer(context, FFX_BRIXELIZER_RESOURCE_IDENTIFIER_UPLOAD_INSTANCE_TRANSFORM_BUFFER, &transform, sizeof(transform));
+        const uint32_t instanceInfoOffset = copyToUploadBuffer(context, FFX_BRIXELIZER_RESOURCE_IDENTIFIER_UPLOAD_INSTANCE_INFO_BUFFER,
+                                                               getFlatInstancePtr(context) + first, run * sizeof(FfxBrixelizerInstanceInfo));
+        const uint32_t instanceTransformOffset = copyToUploadBuffer(context, FFX_BRIXELIZER_RESOURCE_IDENTIFIER_UPLOAD_INSTANCE_TRANSFORM_BUFFER,
+                                                                    getFlatTransformPtr(context) + first, run * sizeof(FfxFloat32x3x4));
 
         scheduleCopy(context,
                      context->resources[FFX_BRIXELIZER_RESOURCE_IDENTIFIER_UPLOAD_INSTANCE_INFO_BUFFER],
                      instanceInfoOffset,
                      context->resources[FFX_BRIXELIZER_RESOURCE_IDENTIFIER_INSTANCE_INFO_BUFFER],
-                     idx * sizeof(FfxBrixelizerInstanceInfo),
-                     sizeof(FfxBrixelizerInstanceInfo),
+                     first * sizeof(FfxBrixelizerInstanceInfo),
+                     run * sizeof(FfxBrixelizerInstanceInfo),
                      L"Instance Info");
 
         scheduleCopy(context,
                      context->resources[FFX_BRIXELIZER_RESOURCE_IDENTIFIER_UPLOAD_INSTANCE_TRANSFORM_BUFFER],
                      instanceTransformOffset,
                      context->resources[FFX_BRIXELIZER_RESOURCE_IDENTIFIER_INSTANCE_TRANSFORM_BUFFER],
-                     idx * sizeof(FfxFloat32x3x4),
-                     sizeof(FfxFloat32x3x4),
+                     first * sizeof(FfxFloat32x3x4),
+                     run * sizeof(FfxFloat32x3x4),
                      L"Instance Transform");
 
-        // vkfw patch: in batches (two copies an instance, FFX_MAX_GPU_JOBS in the queue), not one execution an instance: moving bodies
-        // re-upload every frame.
-        if ((i + 1) % 64 == 0)
+        // In batches: FFX_MAX_GPU_JOBS in the queue.
+        pending += 2;
+        if (pending >= 128)
+        {
             context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, cmdList, context->effectContextId);
+            pending = 0;
+        }
     }
-    if (context->hostNewInstanceListSize % 64 != 0)
+    if (pending != 0)
         context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, cmdList, context->effectContextId);
 
     clearHostNewInstanceList(context);

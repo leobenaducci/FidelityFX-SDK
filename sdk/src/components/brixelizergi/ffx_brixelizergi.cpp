@@ -1636,7 +1636,8 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         scheduleDispatch(pContext, &pContext->pipelineSlotsApply, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsSeed, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsResample, groups, 1, 1);
-        scheduleDispatch(pContext, &pContext->pipelineSlotsStats, groups, 1, 1);
+        if (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_STATS)
+            scheduleDispatch(pContext, &pContext->pipelineSlotsStats, groups, 1, 1);
 
         previous.valid = 1u;
         for (uint32_t i = 0; i < 3; ++i)

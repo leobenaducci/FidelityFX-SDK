@@ -124,7 +124,8 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_SEED_COARSER = (1 << 1),  ///< A new brick is seeded from the next coarser cascade's brick there.
     FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE = (1 << 2), ///< The seed fills the radiance cache too.
     FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC = (1 << 3), ///< A static brick in a mover's bounds keeps its voxel's slot: level L's static cascade is raw cascade L (ffxBrixelizerGetCascadeIndices' layout, with a static cascade at every level).
-    FFX_BRIXELIZER_GI_CACHE_SEED_FINER = (1 << 4),   ///< A new brick is seeded first from the next finer cascade's bricks inside it (their SH averaged by sample count, its radiance from theirs where each texel falls), and only without any from the coarser one.
+    FFX_BRIXELIZER_GI_CACHE_SEED_FINER = (1 << 4),   ///<A new brick is seeded first from the next finer cascade's bricks inside it (their SH averaged by sample count, its radiance from theirs where each texel falls), and only without any from the coarser one.
+    FFX_BRIXELIZER_GI_CACHE_STATS = (1 << 5),        ///< Run the statistics pass after the slot passes: the brick count and the sample histogram in slotCounters (FFX_BRIXELIZER_GI_SLOT_COUNTER_BRICKS, _HISTOGRAM). The other counters are kept either way.
 } FfxBrixelizerGICacheFlags;
 
 /// vkfw patch: the sizes in bytes of the GPU half of the cache slot state (FfxBrixelizerGIDispatchDescription::slotState and the three after it).
