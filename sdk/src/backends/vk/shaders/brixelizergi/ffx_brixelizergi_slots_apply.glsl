@@ -36,6 +36,8 @@
 #define BRIXELIZER_GI_BIND_UAV_NEW_SLOTS                        2000
 #define BRIXELIZER_GI_BIND_UAV_LEVEL_SLOT_MAPS                  2001
 #define BRIXELIZER_GI_BIND_UAV_BRICK_SLOT_MAP                   2002
+#define BRIXELIZER_GI_BIND_UAV_SLOT_CLAIM                       2003
+#define BRIXELIZER_GI_BIND_UAV_SLOT_COUNTERS                    2004
 
 #define BRIXELIZER_BIND_CB_CONTEXT_INFO                         3001
 #define BRIXELIZER_GI_BIND_CB_SLOT_CONSTANTS                    3003
