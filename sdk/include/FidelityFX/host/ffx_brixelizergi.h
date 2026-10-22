@@ -128,7 +128,24 @@ typedef enum FfxBrixelizerGICacheFlags
     FFX_BRIXELIZER_GI_CACHE_STATS = (1 << 5),        ///< Run the statistics pass after the slot passes: the brick count and the sample histogram in slotCounters (FFX_BRIXELIZER_GI_SLOT_COUNTER_BRICKS, _HISTOGRAM). The other counters are kept either way.
 } FfxBrixelizerGICacheFlags;
 
-/// vkfw patch: the sizes in bytes of the GPU half of the cache slot state (FfxBrixelizerGIDispatchDescription::slotState and the three after it).
+/// vkfw patch: how the world cache is kept (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS), in one place: FfxBrixelizerGIDispatchDescription::cacheSettings.
+/// A zero leaves a field at its default (in brackets).
+///
+/// @ingroup ffxBrixelizer
+typedef struct FfxBrixelizerGICacheSettings
+{
+    uint32_t flags;                 ///< FfxBrixelizerGICacheFlags (none).
+    float    seedSamples;           ///< The sample count a seeded brick's irradiance is given, so its own samples soon outweigh it (2).
+    float    seedMinSamples;        ///< The samples a coarser or finer brick needs before a new one is seeded from it (4).
+    float    moverPaddingVoxels;    ///< How far past a moved body's bounds, in voxels of the level, a brick takes its slot through the body's motion: its
+                                    ///< bricks hold its distance field out to about a voxel past its surface (1).
+    uint32_t parkBakes;             ///< The level rebuilds a voxel left without a brick keeps its slot for, so that a brick back in it by then takes its cache back
+                                    ///< (a body between two of a level's source cascades, a LOD handover); at most 15 (8).
+    float    feedMaxSamples;        ///< The sample count a brick's irradiance stops at when it is fed (cacheFeed): what the screen adds later still counts (16).
+    float    emptyBrickMaxSamples;  ///< The empty-brick list (emptyBricks) lists bricks below this many samples (1: bricks with none).
+} FfxBrixelizerGICacheSettings;
+
+/// vkfw patch: the sizes in bytes of the GPU half of the cache slot state(FfxBrixelizerGIDispatchDescription::slotState and the three after it).
 #define FFX_BRIXELIZER_GI_SLOT_STATE_SIZE       (16 * sizeof(uint32_t))
 #define FFX_BRIXELIZER_GI_SLOT_CLAIM_SIZE       (FFX_BRIXELIZER_MAX_BRICKS * sizeof(uint32_t))
 #define FFX_BRIXELIZER_GI_SLOT_FREE_LIST_SIZE   (FFX_BRIXELIZER_MAX_BRICKS * sizeof(uint32_t))
@@ -256,23 +273,19 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource cacheFeed;
     FfxResource cacheFeedCount;
     uint32_t    maxCacheFeedEntries;
-    uint32_t    cacheFeedFlags;             ///< FfxBrixelizerGICacheFeedFlags
-    float       cacheFeedMaxSamples;        ///< The sample count a brick's irradiance stops at when it is fed (16 if 0): what the screen adds later still counts.
+    uint32_t    cacheFeedFlags;             ///< FfxBrixelizerGICacheFeedFlags (the sample cap: cacheSettings.feedMaxSamples)
     /// vkfw patch, optional (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS): the bricks the cache feed should fill. A buffer of 16 bytes of header (the
     /// count, then 3 uint32s of padding) and maxEmptyBricks FfxBrixelizerGIEmptyBrick; whenever a dispatch rebuilds levels (updatedCascadeMask,
-    /// the SDK's own rebuilds) it is started over and every brick of those levels with fewer than emptyBrickMaxSamples samples (or no cache
+    /// the SDK's own rebuilds) it is started over and every brick of those levels with fewer than cacheSettings.emptyBrickMaxSamples samples (or no cache
     /// slot) is listed. The count may exceed maxEmptyBricks (the entries past it are dropped). Read it a frame later, trace or probe those
     /// places, and feed them back (cacheFeed, FFX_BRIXELIZER_GI_CACHE_FEED_EMPTY_ONLY).
     FfxResource emptyBricks;
     uint32_t    maxEmptyBricks;
-    float       emptyBrickMaxSamples;       ///< Listed below this many samples (1 if 0: bricks with none).
 
     /// vkfw patch, with FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS: what the bake before this dispatch did to the merged cascades. Bit i is merged cascade
     /// startCascade + i, rebuilt by that bake (normally one a frame, or none).
     uint32_t updatedCascadeMask;
-    uint32_t cacheFlags;                    ///< FfxBrixelizerGICacheFlags
-    float    seedSamples;                   ///< The sample count a seeded brick's irradiance is given, so its own samples soon outweigh it (2).
-    float    seedMinSamples;                ///< The samples a coarser brick needs before a new one is seeded from it (4).
+    FfxBrixelizerGICacheSettings cacheSettings;  ///< vkfw patch: how the cache is kept (flags, seeding, movers, parking, feed and list thresholds)
     const FfxBrixelizerGIMover* movers;     ///< Bodies that moved since the updated cascades' last bakes, at most FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS a level.
     uint32_t numMovers;
 

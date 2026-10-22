@@ -53,12 +53,11 @@
 #define FFX_BRIXELIZER_GI_SLOT_LOST_FLAG 0x80000000u
 
 // A level slot map entry is a slot, or a parked slot with its age above FFX_BRIXELIZER_GI_SLOT_PARK_SHIFT: a voxel that held a brick and has none
-// after a bake keeps its slot, unclaimed, for FFX_BRIXELIZER_GI_SLOT_PARK_BAKES bakes of the level before it is freed, so that a brick back in the
+// after a bake keeps its slot, unclaimed, for park_bakes (FfxBrixelizerGICacheSettings::parkBakes) bakes of the level before it is freed, so that a brick back in the
 // voxel by then takes its cache back (FfxBrixelizerGISlotsClaimSame). A body is briefly in no cascade when it moves between a level's source
 // cascades on different rebuilds (a mover that settled leaves the mover cascade on its next rebuild and enters the static one on that one's), and
 // a LOD handover can do the same. Parked only while the window stands still: a parked entry keeps the placement it was written at.
 #define FFX_BRIXELIZER_GI_SLOT_PARK_SHIFT 24u
-#define FFX_BRIXELIZER_GI_SLOT_PARK_BAKES 8u
 #define FFX_BRIXELIZER_GI_SLOT_COUNTER_PARKED 13u           // voxels that kept their slot, parked, with no brick in them
 
 FfxUInt32 FfxBrixelizerGISlotOfEntry(FfxUInt32 entry)
@@ -97,13 +96,13 @@ FfxUInt32 FfxBrixelizerGISlotLevelBase()
 }
 
 // Whether a level slot map cell's entry stays, parked, through this bake (the free and the apply passes agree on it): its slot is unclaimed, the
-// cell has no brick now, the window has not moved, and the entry is younger than FFX_BRIXELIZER_GI_SLOT_PARK_BAKES.
+// cell has no brick now, the window has not moved, and the entry is younger than park_bakes.
 #if defined FFX_BRIXELIZER_GI_SLOTS_PASS_FREE || defined FFX_BRIXELIZER_GI_SLOTS_PASS_APPLY
 FfxBoolean FfxBrixelizerGISlotsParks(FfxUInt32 cell, FfxUInt32 entry)
 {
     const FfxUInt32 slot = FfxBrixelizerGISlotOfEntry(entry);
     if (slot == FFX_BRIXELIZER_GI_SLOT_INVALID || GetSlotConstants().previous_valid == 0u || GetSlotConstants().carry == 0u ||
-        (entry >> FFX_BRIXELIZER_GI_SLOT_PARK_SHIFT) + 1u > FFX_BRIXELIZER_GI_SLOT_PARK_BAKES || SlotClaimLoad(slot) == GetSlotConstants().claim_tag)
+        (entry >> FFX_BRIXELIZER_GI_SLOT_PARK_SHIFT) + 1u > GetSlotConstants().park_bakes ||SlotClaimLoad(slot) == GetSlotConstants().claim_tag)
         return FFX_FALSE;
     const FfxBrixelizerCascadeInfo cascade = GetCascadeInfo(GetSlotConstants().cascade_index);
     if (any(FFX_NOT_EQUAL(FfxInt32x3(round((cascade.grid_min - GetSlotConstants().previous_grid_min) / cascade.voxel_size)), FFX_BROADCAST_INT32X3(0))))
@@ -190,9 +189,10 @@ void FfxBrixelizerGISlotsClaimMover(FfxUInt32 tid)
     const FfxFloat32x4 position4 = FfxFloat32x4(position, 1.0);
     for (FfxUInt32 m = 0u; m < GetSlotConstants().num_movers; ++m)
     {
-        // A voxel's bricks hold the body's distance field out to a voxel past its surface.
-        if (all(FFX_GREATER_THAN_EQUAL(position, GetSlotMoverBoundsMin(m) - FFX_BROADCAST_FLOAT32X3(cascade.voxel_size))) &&
-            all(FFX_LESS_THAN_EQUAL(position, GetSlotMoverBoundsMax(m) + FFX_BROADCAST_FLOAT32X3(cascade.voxel_size))))
+        // A voxel's bricks hold the body's distance field out to about a voxel past its surface (moverPaddingVoxels).
+        const FfxFloat32 padding = GetSlotConstants().mover_padding * cascade.voxel_size;
+        if (all(FFX_GREATER_THAN_EQUAL(position, GetSlotMoverBoundsMin(m) - FFX_BROADCAST_FLOAT32X3(padding))) &&
+            all(FFX_LESS_THAN_EQUAL(position, GetSlotMoverBoundsMax(m) + FFX_BROADCAST_FLOAT32X3(padding))))
         {
             const FfxFloat32x3 previous_position = FfxFloat32x3(dot(GetSlotMoverRow(m, 0u), position4), dot(GetSlotMoverRow(m, 1u), position4), dot(GetSlotMoverRow(m, 2u), position4));
             const FfxFloat32x3 rel               = (previous_position - GetSlotConstants().previous_grid_min) / GetSlotConstants().previous_voxel_size;

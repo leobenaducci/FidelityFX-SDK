@@ -140,8 +140,8 @@ struct FfxBrixelizerGISlotConstants
 
     FfxFloat32   empty_threshold;        // a brick with fewer samples than this is listed
     FfxUInt32    empty_reset;            // the first level the dispatch rebuilds: its first pass starts the list over
-    FfxUInt32    _padding2;
-    FfxUInt32    _padding3;
+    FfxFloat32   mover_padding;          // voxels past a mover's bounds its bricks are looked for in (FfxBrixelizerGICacheSettings::moverPaddingVoxels)
+    FfxUInt32    park_bakes;             // rebuilds a voxel without a brick keeps its slot for (FfxBrixelizerGICacheSettings::parkBakes)
 
     FfxBrixelizerGISlotMover movers[FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS];
 };

@@ -1560,6 +1560,7 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
     FfxBrixelizerGISlotConstants& constants = pContext->slotConstants;
     constexpr uint32_t voxels = FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION * FFX_BRIXELIZER_CASCADE_RESOLUTION;
     const bool bEmptyList  = !isResourceNull(pDispatchDescription->emptyBricks) && pDispatchDescription->maxEmptyBricks > 0;
+    const FfxBrixelizerGICacheSettings& settings = pDispatchDescription->cacheSettings;
     bool       bFirstLevel = true;
 
     for (uint32_t level = 0; level < FFX_BRIXELIZER_GI_SLOT_LEVELS; ++level)
@@ -1575,7 +1576,7 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         constants.cascade_index         = cascadeIndex;
         constants.level_index           = level;
         constants.previous_valid        = previous.valid ? 1u : 0u;
-        constants.carry                 = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_CARRY) ? 1u : 0u;
+        constants.carry                 = (settings.flags & FFX_BRIXELIZER_GI_CACHE_CARRY) ? 1u : 0u;
         constants.previous_voxel_size   = previous.voxelSize;
         for (uint32_t i = 0; i < 3; ++i)
         {
@@ -1583,20 +1584,22 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
             constants.previous_clipmap_offset[i] = previous.clipmapOffset[i];
         }
         // Only one cascade bakes a frame, so the coarser one is as its own last bake left it, cache and all.
-        const bool bCoarser = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_COARSER) && level + 1 < FFX_BRIXELIZER_GI_SLOT_LEVELS &&
+        const bool bCoarser = (settings.flags & FFX_BRIXELIZER_GI_CACHE_SEED_COARSER)&& level + 1 < FFX_BRIXELIZER_GI_SLOT_LEVELS &&
                               cascadeIndex + 1 <= pDispatchDescription->endCascade && slotState->levels[level + 1].valid;
         constants.coarser_cascade_index = bCoarser ? cascadeIndex + 1 : 0xffffffffu;
         // The finer one was rebuilt more recently (finer levels rebuild more often) and sees the voxel in more detail.
-        const bool bFiner = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_FINER) && level > 0 && cascadeIndex > pDispatchDescription->startCascade &&
+        const bool bFiner = (settings.flags & FFX_BRIXELIZER_GI_CACHE_SEED_FINER)&& level > 0 && cascadeIndex > pDispatchDescription->startCascade &&
                             slotState->levels[level - 1].valid;
         constants.finer_cascade_index   = bFiner ? cascadeIndex - 1 : 0xffffffffu;
-        constants.seed_samples          = pDispatchDescription->seedSamples;
-        constants.seed_radiance         = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE) ? 1u : 0u;
-        constants.seed_min_samples      = pDispatchDescription->seedMinSamples;
+        constants.seed_samples          = settings.seedSamples > 0.0f ? settings.seedSamples : 2.0f;
+        constants.seed_radiance         = (settings.flags & FFX_BRIXELIZER_GI_CACHE_SEED_RADIANCE) ? 1u : 0u;
+        constants.seed_min_samples      = settings.seedMinSamples > 0.0f ? settings.seedMinSamples : 4.0f;
+        constants.mover_padding         = settings.moverPaddingVoxels > 0.0f ? settings.moverPaddingVoxels : 1.0f;
+        constants.park_bakes            = settings.parkBakes > 0u ? (settings.parkBakes < 15u ? settings.parkBakes : 15u) : 8u;
         constants.claim_tag             = ++slotState->claimTag;
-        constants.static_source_cascade = (pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC) ? level : 0xffffffffu;
+        constants.static_source_cascade = (settings.flags & FFX_BRIXELIZER_GI_CACHE_MOVERS_SKIP_STATIC) ? level : 0xffffffffu;
         constants.empty_max             = bEmptyList ? pDispatchDescription->maxEmptyBricks : 0u;
-        constants.empty_threshold       = pDispatchDescription->emptyBrickMaxSamples > 0.0f ? pDispatchDescription->emptyBrickMaxSamples : 1.0f;
+        constants.empty_threshold       = settings.emptyBrickMaxSamples > 0.0f ? settings.emptyBrickMaxSamples : 1.0f;
         constants.empty_reset           = bEmptyList && bFirstLevel ? 1u : 0u;
         bFirstLevel                     = false;
 
@@ -1648,7 +1651,7 @@ static void brixelizerGIScheduleSlots(FfxBrixelizerGIContext_Private* pContext, 
         scheduleDispatch(pContext, &pContext->pipelineSlotsSeed, groups, 1, 1);
         scheduleDispatch(pContext, &pContext->pipelineSlotsResample, groups, 1, 1);
         // The statistics pass also lists the empty bricks.
-        if ((pDispatchDescription->cacheFlags & FFX_BRIXELIZER_GI_CACHE_STATS) || bEmptyList)
+        if ((settings.flags & FFX_BRIXELIZER_GI_CACHE_STATS) || bEmptyList)
             scheduleDispatch(pContext, &pContext->pipelineSlotsStats, groups, 1, 1);
 
         previous.valid = 1u;
@@ -1938,7 +1941,7 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
     giConstants.world_ao_radius                          = pDispatchDescription->worldAORadius > 0.0f ? pDispatchDescription->worldAORadius : 1.0f;
     giConstants.cache_feed_max                           = isResourceNull(pDispatchDescription->cacheFeed) ? 0u : pDispatchDescription->maxCacheFeedEntries;
     giConstants.cache_feed_flags                         = pDispatchDescription->cacheFeedFlags;
-    giConstants.cache_feed_max_samples                   = pDispatchDescription->cacheFeedMaxSamples > 0.0f ? pDispatchDescription->cacheFeedMaxSamples : 16.0f;
+    giConstants.cache_feed_max_samples                   = pDispatchDescription->cacheSettings.feedMaxSamples > 0.0f ? pDispatchDescription->cacheSettings.feedMaxSamples : 16.0f;
 
     FfxBrixelizerContextInfo contextInfo = {};
     FFX_VALIDATE(ffxBrixelizerRawContextGetInfo((FfxBrixelizerRawContext*)rawContext, &contextInfo));
