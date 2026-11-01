@@ -983,7 +983,10 @@ void FfxBrixelizerGIFillScreenProbes(FfxUInt32x2 tid)
             FfxFloat32x3               hit_world_offset = voxel_min + uvw * cinfo.voxel_size;
             FfxBxAtlasBounds atlas_bounds     = FfxBrixelizerGetAtlasBounds(brick_id);
 
-            radiance.xyz = FfxBrixelizerGISampleRadianceCacheSH(brick_id, rs.ray_direction);
+            // vkfw patch: the brick's radiance texels, not its direct SH. Only the screen's light (FfxBrixelizerGIEmitRadiance) writes the
+            // direct SH, so up to 72% of a Bistro camera's rays hit a brick whose SH never held anything, and the diffuse GI was 90-99% sky.
+            // The texels also take the application's seed (docs/gi-and-raytracing.md).
+            radiance.xyz = FfxBrixelizerGISampleRadianceCache(brick_id, uvw);
 
             radiance = FfxFloat32x4(radiance.xyz, length(hit_world_offset - rs.ray_origin));
         }
