@@ -235,10 +235,10 @@ FfxBoolean FfxBrixelizerGIFinite(FfxFloat32x4 v)
     return all(FFX_NOT_EQUAL(ffxAsUInt32(v) & FFX_BROADCAST_UINT32X4(0x7f800000u), FFX_BROADCAST_UINT32X4(0x7f800000u)));
 }
 
-// vkfw patch: a radiance texel is lit once anything wrote a non-zero radiance to it; zero (or not a number) is one nothing has reached.
+// vkfw patch: a radiance texel is lit once anything wrote a finite, non-zero radiance to it; anything else is one nothing has reached.
 FfxBoolean FfxBrixelizerGIRadianceTexelLit(FfxFloat32x3 texel)
 {
-    return any(FFX_GREATER_THAN(texel, FFX_BROADCAST_FLOAT32X3(0.0))) && !any(isnan(texel));
+    return any(FFX_GREATER_THAN(texel, FFX_BROADCAST_FLOAT32X3(0.0))) && FfxBrixelizerGIFinite(FfxFloat32x4(texel, FfxFloat32(0.0)));
 }
 
 // vkfw patch: trilinear between a slot's 4^3 radiance texels (centres at uvw = k/3), over the lit ones only.A texel nothing has lit yet is
