@@ -531,9 +531,16 @@ FfxFloat32x4 FfxBrixelizerGILDS_LoadRadiance(FfxInt32x2 c)
 }
 
 #define FFX_BRIXELIZER_GI_RADIANCE_QUANTIZE_K FfxFloat32(1.0e4)
+// vkfw patch: rounded, not floored. The screen probes' reprojection sums each neighbour's weighted radiance through this, every frame,
+// and most probes keep that reprojected history for 15 frames in 16: a floor took up to 1e-4 off every contribution, always down, and
+// over a dark GI value the loss added up frame after frame. The irradiance cache stored the result, so a brick read about cos^2 of its
+// angle from the view axis (the weights follow a tile's footprint): looking away and back was up to half or double for seconds, and the
+// settled image read low (docs/gi-and-raytracing.md in the engine).
 FfxUInt32x4 FfxBrixelizerGIQuantizeRadiance(FfxFloat32x4 radiance)
 {
-    return FfxUInt32x4(floor(FFX_BRIXELIZER_GI_RADIANCE_QUANTIZE_K * radiance));
+    // Clamped too: a negative value has no unsigned form, and up to nine weighted neighbours are summed, so one stays under 2^32 / 9.
+    return FfxUInt32x4(clamp(floor(FFX_BRIXELIZER_GI_RADIANCE_QUANTIZE_K * radiance + FFX_BROADCAST_FLOAT32X4(FfxFloat32(0.5))),
+        FFX_BROADCAST_FLOAT32X4(FfxFloat32(0.0)), FFX_BROADCAST_FLOAT32X4(FfxFloat32(4.0e8))));
 }
 
 FfxFloat32x4 FfxBrixelizerGIRecoverRadiance(FfxUInt32x4 quantized_radiance)
