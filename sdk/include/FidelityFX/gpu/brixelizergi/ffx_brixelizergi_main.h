@@ -417,6 +417,16 @@ FfxRay FfxBrixelizerGIGenReflectionRay(FfxUInt32x2 pixel_coordinate, FfxUInt32x2
     return ray;
 }
 
+FfxBoolean FfxBrixelizerGIIsCheckerboard(FfxUInt32x2 tid)
+{
+    FfxUInt32x2 qid   = (tid / 8) % 4;
+    qid               = ffxWaveReadLaneFirstU2(qid); // scalar
+    FfxUInt32   qidx  = qid.x + qid.y * 4;
+    FfxUInt32   seed  = LoadTempRandomSeed(tid / FfxUInt32(8));
+    FfxUInt32   shift = seed % FfxUInt32(16);
+    return qidx == shift;
+}
+
 ////////////////////////////
 // Interface functions /////
 ////////////////////////////
@@ -905,10 +915,15 @@ void FfxBrixelizerGIFillScreenProbes(FfxUInt32x2 tid)
 
     FfxFloat32x4 history = LoadStaticScreenProbesSRV(rs.target_pixel_coord);
 
-    // vkfw patch: every probe traces every frame. A probe whose reprojection succeeded used to trace one frame in 16 and keep the
-    // reprojected history otherwise, which loses light, and the irradiance cache stores what the probes hold: a brick read about cos^2 of
-    // its angle from the view axis, so looking away and back was up to half or double for seconds, and the settled image read low
-    // (docs/gi-and-raytracing.md in the engine). 0.7-0.9 ms on an RTX 3070 at 1440 x 810.
+    FfxBoolean successfull_reproj = LoadTempSpawnMask(probe_coord) == 1;
+    FfxBoolean skip               = ffxWaveReadLaneFirstB1(!FfxBrixelizerGIIsCheckerboard(tid) && successfull_reproj);
+    
+    if (skip) // Scalar early out if reprojection was successful
+    { 
+        StoreStaticScreenProbes(rs.target_pixel_coord, history);
+        return;
+    }
+
     FfxBrixelizerHitRaw hit;
 
     FfxUInt32  g_starting_cascade = GetTracingConstantsStartCascade();
