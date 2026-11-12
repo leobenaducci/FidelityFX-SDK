@@ -1943,7 +1943,8 @@ pContext->contextDescription.backendInterface.fpRegisterResource(&pContext->cont
     giConstants.tracing_constants.t_min                  = pDispatchDescription->tMin;
     giConstants.tracing_constants.t_max                  = pDispatchDescription->tMax;
     giConstants.visibility_flags                         = (bSkyVisibility ? FFX_BRIXELIZER_GI_VISIBILITY_SKY : 0u) | (bWorldAO ? FFX_BRIXELIZER_GI_VISIBILITY_AO : 0u) |
-                                                           (bSkyVisibilityHistory ? FFX_BRIXELIZER_GI_VISIBILITY_HISTORY : 0u);
+                                                           (bSkyVisibilityHistory ? FFX_BRIXELIZER_GI_VISIBILITY_HISTORY : 0u) |
+                                                           (pDispatchDescription->surfaceTest ? FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST : 0u);
     giConstants.world_ao_radius                          = pDispatchDescription->worldAORadius > 0.0f ? pDispatchDescription->worldAORadius : 1.0f;
     giConstants.cache_feed_max                           = isResourceNull(pDispatchDescription->cacheFeed) ? 0u : pDispatchDescription->maxCacheFeedEntries;
     giConstants.cache_feed_flags                         = pDispatchDescription->cacheFeedFlags;

@@ -284,6 +284,8 @@ typedef struct FfxBrixelizerGIDispatchDescription
     FfxResource cacheFeedCount;
     uint32_t    maxCacheFeedEntries;
     uint32_t    cacheFeedFlags;             ///< FfxBrixelizerGICacheFeedFlags (the sample cap: cacheSettings.feedMaxSamples)
+    bool        surfaceTest;                ///< vkfw patch: a pixel takes the brick cache's irradiance only where the SDF holds its surface, and its screen probes'
+                                            ///< elsewhere (a mesh left out of the SDF, a body that moved): see FfxBrixelizerGISurfaceMismatch.
     /// vkfw patch, optional (FFX_BRIXELIZER_GI_FLAG_CACHE_SLOTS): the bricks the cache feed should fill. A buffer of 16 bytes of header (the
     /// count, then 3 uint32s of padding) and maxEmptyBricks FfxBrixelizerGIEmptyBrick; whenever a dispatch rebuilds levels (updatedCascadeMask,
     /// the SDK's own rebuilds) it is started over (unless FFX_BRIXELIZER_GI_CACHE_EMPTY_ACCUMULATE) and every brick of those levels with fewer than cacheSettings.emptyBrickMaxSamples samples (or no cache

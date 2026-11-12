@@ -1514,6 +1514,34 @@ FFX_MIN16_F3 FfxBrixelizerGISampleWorldGI(FfxFloat32x3 world_pos, FfxFloat32 xi,
 
 // 8x8 group
 // Project 2x2 closest SH probes onto GBuffer normals, use irradiance ambient cache when projection fails
+// vkfw patch: how far the SDF is from holding the surface at a pixel's position, 0 (it does) to 1 (no brick there, or one of other
+// geometry: a mesh left out of the SDF, a body that moved since its bricks were built). The brick of the finest cascade that holds the
+// position, as the engine's probes find it (BrixelizerProbes.hlsl, FindBrick), and its SDF there: the surface is the brick's within 0.3 of the
+// atlas' distance unit and not beyond 0.7, as BrixelizerProbes.hlsl's SDFMismatch, so that the two agree on which pixels the SDF misses.
+FfxFloat32 FfxBrixelizerGISurfaceMismatch(FfxFloat32x3 world_pos, FfxUInt32 g_starting_cascade, FfxUInt32 g_end_cascade)
+{
+    for (FfxUInt32 cascade_id = g_starting_cascade; cascade_id <= g_end_cascade; cascade_id++)
+    {
+        const FfxBrixelizerCascadeInfo cinfo = GetCascadeInfo(cascade_id);
+        const FfxFloat32x3 rel = (world_pos - cinfo.grid_min) * cinfo.ivoxel_size;
+        if (cinfo.is_enabled == 0 || any(FFX_LESS_THAN(rel, FFX_BROADCAST_FLOAT32X3(0.0))) ||
+            any(FFX_GREATER_THAN_EQUAL(rel, FFX_BROADCAST_FLOAT32X3(FfxFloat32(FFX_BRIXELIZER_CASCADE_RESOLUTION)))))
+            continue;
+        const FfxUInt32x3 voxel = FfxUInt32x3(rel);
+        const FfxUInt32 voxel_idx = FfxBrixelizerFlattenPOT(FfxBrixelizerWrapCoords(FfxInt32x3(cinfo.clipmap_offset), FFX_BRIXELIZER_CASCADE_WRAP_MASK, voxel), FFX_BRIXELIZER_CASCADE_DEGREE);
+        const FfxUInt32 brick_id = LoadCascadeBrickMapArrayNonUniform(cascade_id, voxel_idx);
+        if (!FfxBrixelizerIsValidID(brick_id))
+            return FfxFloat32(1.0);
+        const FfxFloat32 atlas_size = FfxFloat32(FFX_BRIXELIZER_STATIC_CONFIG_SDF_ATLAS_SIZE);
+        const FfxFloat32x3 atlas_min = (FfxFloat32x3(FfxBrixelizerGetSDFAtlasOffset(brick_id)) + FFX_BROADCAST_FLOAT32X3(0.5)) / atlas_size;
+        const FfxFloat32x3 atlas_max = atlas_min + FFX_BROADCAST_FLOAT32X3(7.0 / atlas_size);
+        const FfxFloat32 distance = SampleSDFAtlas(ffxLerp(atlas_min, atlas_max, rel - FfxFloat32x3(voxel)));
+        const FfxFloat32 t = ffxSaturate((distance - FfxFloat32(0.3)) / FfxFloat32(0.4));
+        return t * t * (FfxFloat32(3.0) - FfxFloat32(2.0) * t);
+    }
+    return FfxFloat32(1.0);
+}
+
 void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
 {
     FfxUInt32x2    probe_screen_offset = FfxBrixelizerGIRoundDown(tid, 8u);
@@ -1709,10 +1737,18 @@ FfxFloat32 size_weight           = ffxSaturate(eps_size / (GetContextInfo().casc
 
     FFX_MIN16_F4 probe_sh[9];
     StoreDebugTarget(tid, FfxFloat32x4(0.0, 0.0, 0.0, 1.0));
-    
+
     FfxBoolean has_world_probe = FfxBrixelizerGIInterpolateBrickSH(world_pos, g_starting_cascade, g_end_cascade, xi, /* inout */ probe_sh);
-    
-    if (has_world_probe) 
+
+    // vkfw patch (FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST): the bricks at the pixel's position are its light only if they hold its surface.
+    // Upstream, any brick there replaced the screen probes outright, so a mesh left out of the SDF (an animated mesh, a body that moved) took
+    // the light of the static geometry whose bricks reach it -- a ball resting on the floor lit as the floor -- although the screen probes
+    // spawned on it had gathered its own. With the test, such a pixel keeps its screen probes, and one in between blends the two.
+    FfxFloat32 brick_share = FfxFloat32(1.0);
+    if (has_world_probe && (visibility_flags & FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST) != 0u && weight_sum >= FfxFloat32(1.0e-3))
+        brick_share = FfxFloat32(1.0) - FfxBrixelizerGISurfaceMismatch(world_pos, g_starting_cascade, g_end_cascade);
+
+    if (has_world_probe && brick_share > FfxFloat32(0.0))
     {
         // if (probe_sh[0].w > FfxFloat32(4.0))
         {
@@ -1722,14 +1758,14 @@ FfxFloat32 size_weight           = ffxSaturate(eps_size / (GetContextInfo().casc
             FfxFloat32x3 cur_irradiance = FFX_BROADCAST_FLOAT32X3(0.0);
             FfxFloat32x3 cur_specular_irradiance = FFX_BROADCAST_FLOAT32X3(0.0);
 
-            for (FfxUInt32 i = 0; i < 9; i++) 
+            for (FfxUInt32 i = 0; i < 9; i++)
             {
                 cur_irradiance += cosine_sh[i] * probe_sh[i].xyz;
                 cur_specular_irradiance += reflection_sh[i] * probe_sh[i].xyz;
             }
 
-            irradiance = cur_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0));
-            specular_irradiance = cur_specular_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0));
+            irradiance = ffxLerp(irradiance, cur_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0)), brick_share);
+            specular_irradiance = ffxLerp(specular_irradiance, cur_specular_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0)), brick_share);
         }
     }
     if (!has_world_probe && weight_sum < FfxFloat32(1.0e-3)) 

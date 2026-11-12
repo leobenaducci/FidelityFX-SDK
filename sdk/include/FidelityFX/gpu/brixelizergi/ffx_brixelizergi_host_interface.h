@@ -110,6 +110,8 @@ struct FfxBrixelizerGIPassConstants
 #define FFX_BRIXELIZER_GI_VISIBILITY_SKY     1u
 #define FFX_BRIXELIZER_GI_VISIBILITY_AO      2u
 #define FFX_BRIXELIZER_GI_VISIBILITY_HISTORY 4u
+// vkfw patch: FfxBrixelizerGIDispatchDescription::surfaceTest (not a visibility target; it rides in the same flags).
+#define FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST 8u
 
 #define FFX_BRIXELIZER_GI_MAX_SLOT_MOVERS 512
 

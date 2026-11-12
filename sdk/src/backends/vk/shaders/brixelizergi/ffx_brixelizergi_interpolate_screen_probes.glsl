@@ -40,6 +40,8 @@
 #define BRIXELIZER_BIND_SRV_CASCADE_BRICK_MAPS               7
 #define BRIXELIZER_GI_BIND_SRV_INPUT_MOTION_VECTORS          8
 #define BRIXELIZER_GI_BIND_SRV_SKY_VISIBILITY_HISTORY        9
+// vkfw patch: the surface test's SDF sample (FfxBrixelizerGISurfaceMismatch).
+#define BRIXELIZER_BIND_SRV_SDF_ATLAS                        10
 
 #define BRIXELIZER_GI_BIND_SRV_BRICK_SLOT_MAP                500
 
