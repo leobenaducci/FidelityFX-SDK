@@ -34,6 +34,7 @@
 #endif  // _WIN32
 
 #include <vulkan/vulkan.h>
+#include <vector>  // vkfw patch: ffxSetQueueFamiliesVK
 
 // prototypes for functions in the interface
 FfxVersionNumber       GetSDKVersionVK(FfxInterface* backendInterface);
@@ -78,6 +79,15 @@ static FfxConstantBufferAllocator s_fpConstantAllocator = nullptr;
 
 // vkfw patch: descriptor buffer mode (ffxSetDescriptorBufferModeVK).
 static bool                              s_bWantDescriptorBuffers = false;
+// vkfw patch: ffxSetQueueFamiliesVK's families; two or more make the buffers below concurrent across them.
+static std::vector<uint32_t>             s_concurrentQueueFamilies;
+static void applyBufferSharingVK(VkBufferCreateInfo& bufferInfo)
+{
+    const bool concurrent = s_concurrentQueueFamilies.size() > 1;
+    bufferInfo.sharingMode           = concurrent ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+    bufferInfo.queueFamilyIndexCount = concurrent ? static_cast<uint32_t>(s_concurrentQueueFamilies.size()) : 0;
+    bufferInfo.pQueueFamilyIndices   = concurrent ? s_concurrentQueueFamilies.data() : nullptr;
+}
 static bool                              s_bDescriptorBuffersActive = false;
 static FfxDescriptorBufferRestoreFuncVK  s_fpDescriptorBufferRestore = nullptr;
 static void*                             s_pDescriptorBufferRestoreUser = nullptr;
@@ -92,6 +102,11 @@ FFX_API void ffxSetDescriptorBufferModeVK(bool enable, FfxDescriptorBufferRestor
 FFX_API bool ffxIsDescriptorBufferModeVK()
 {
     return s_bDescriptorBuffersActive;
+}
+
+FFX_API void ffxSetQueueFamiliesVK(const uint32_t* queueFamilyIndices, uint32_t count)
+{
+    s_concurrentQueueFamilies.assign(queueFamilyIndices, queueFamilyIndices + (queueFamilyIndices ? count : 0));
 }
 
 // Offset the binding of samplers to avoid collisions
@@ -1347,7 +1362,7 @@ FfxConstantAllocation BackendContext_VK::FallbackConstantAllocator(void* data, F
         bufferInfo.usage              = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         if (useDescriptorBuffers)
             bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;  // vkfw patch
-        bufferInfo.sharingMode        = VK_SHARING_MODE_EXCLUSIVE;
+        applyBufferSharingVK(bufferInfo);  // vkfw patch
 
         VkResult res = vkFunctionTable.vkCreateBuffer(device, &bufferInfo, NULL, &uniformBuffer);
         FFX_ASSERT(res == VK_SUCCESS);
@@ -1780,7 +1795,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
             dbBufferInfo.size                = backendContext->dbPersistentSize + backendContext->dbRingSize;
             dbBufferInfo.usage               = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            dbBufferInfo.sharingMode         = VK_SHARING_MODE_EXCLUSIVE;
+            applyBufferSharingVK(dbBufferInfo);  // vkfw patch
             if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &dbBufferInfo, nullptr, &backendContext->dbBuffer) == VK_SUCCESS)
             {
                 VkMemoryRequirements dbRequirements = {};
@@ -1825,7 +1840,7 @@ descriptorBuffersDone:
             bufferInfo.usage              = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             if (backendContext->useDescriptorBuffers)
                 bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;  // vkfw patch: its descriptors are addresses
-            bufferInfo.sharingMode        = VK_SHARING_MODE_EXCLUSIVE;
+            applyBufferSharingVK(bufferInfo);  // vkfw patch
 
             if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &bufferInfo, NULL, &backendContext->uniformBuffer) != VK_SUCCESS)
             {
@@ -2607,7 +2622,7 @@ FfxErrorCode CreateResourceVK(
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = createResourceDescription->resourceDescription.width;
         bufferInfo.usage = ffxGetVKBufferUsageFlagsFromResourceUsage(resourceDesc.usage);
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        applyBufferSharingVK(bufferInfo);  // vkfw patch
 
         if (initData.type != FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED)
             bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;

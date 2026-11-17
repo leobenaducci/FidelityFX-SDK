@@ -103,6 +103,16 @@ FFX_API void ffxSetDescriptorBufferModeVK(bool enable, FfxDescriptorBufferRestor
 /// @ingroup VKBackend
 FFX_API bool ffxIsDescriptorBufferModeVK();
 
+/// vkfw patch: the queue families the backend's buffers are shared by. With two or more, every buffer it creates from then on
+/// that an effect's dispatches use -- its effects' resources, its constant ring, its descriptor buffer -- is made
+/// VK_SHARING_MODE_CONCURRENT across them, so one effect can run on the compute queue and another read its results on the
+/// graphics queue with a semaphore between them and no ownership transfer (Brixelizer's bake and its GI). With fewer, or
+/// never called, buffers are exclusive, as upstream. Images stay exclusive. Call before creating the interface and the
+/// effects; the families must be distinct and the device's. Copied.
+///
+/// @ingroup VKBackend
+FFX_API void ffxSetQueueFamiliesVK(const uint32_t* queueFamilyIndices, uint32_t count);
+
 /// Convenience structure to hold all VK-related device information
 typedef struct VkDeviceContext {
     VkDevice                vkDevice;           /// The Vulkan device
