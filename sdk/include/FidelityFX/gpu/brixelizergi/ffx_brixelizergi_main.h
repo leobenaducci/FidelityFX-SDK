@@ -1936,7 +1936,10 @@ void FfxBrixelizerGIBlurGI(FfxUInt32x2 tid, FfxUInt32x2 gid)
         return;
     }
 
-#if defined(FfxBrixelizerGIBlurGI_PASS_0)
+// vkfw patch: the X pass's entry points (ffx_brixelizergi_blur_x.hlsl/.glsl) define FFX_SDFGI_BlurGI_PASS_0, an older name, so upstream
+// both passes blurred along y and none along x: vertical streaks wherever the radius is large (a short history -- moving bodies,
+// a mesh outside the SDF). Either name selects x.
+#if defined(FfxBrixelizerGIBlurGI_PASS_0) || defined(FFX_SDFGI_BlurGI_PASS_0)
     FfxInt32x2 dir = FfxInt32x2(1, 0);
 #else  // !#if defined(FfxBrixelizerGIBlurGI_PASS_0)
     FfxInt32x2 dir = FfxInt32x2(0, 1);
