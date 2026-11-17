@@ -231,6 +231,10 @@ typedef struct BackendContext_VK {
 
     FfxGpuJobDescription*   pGpuJobs;
     uint32_t                gpuJobCount = 0;
+    // vkfw patch: the effect whose dispatch may run each scheduled job -- 0 for any (what a dispatch schedules for itself,
+    // run in the same call), else the owning effect context's id + 1: a resource's initial-data upload, which CreateResourceVK
+    // schedules between dispatches and only that effect's own may run (ExecuteGpuJobsVK).
+    uint32_t                gpuJobOwners[FFX_MAX_GPU_JOBS];
 
     typedef struct VkResourceView {
         VkImageView imageView;
@@ -2452,6 +2456,20 @@ FfxErrorCode DestroyBackendContextVK(FfxInterface* backendInterface, FfxUInt32 e
     BackendContext_VK* backendContext = (BackendContext_VK*)backendInterface->scratchBuffer;
     FFX_ASSERT(backendContext->refCount > 0);
 
+    // vkfw patch: its queued jobs go with it -- no dispatch of its own will run them now, and their resources are freed below.
+    {
+        uint32_t keptJobCount = 0;
+        for (uint32_t i = 0; i < backendContext->gpuJobCount; ++i)
+        {
+            if (backendContext->gpuJobOwners[i] == effectContextId + 1)
+                continue;
+            backendContext->pGpuJobs[keptJobCount] = backendContext->pGpuJobs[i];
+            backendContext->gpuJobOwners[keptJobCount] = backendContext->gpuJobOwners[i];
+            ++keptJobCount;
+        }
+        backendContext->gpuJobCount = keptJobCount;
+    }
+
     // Delete any resources allocated by this context
     BackendContext_VK::EffectContext& effectContext = backendContext->pEffectContexts[effectContextId];
     for (uint32_t currentStaticResourceIndex = effectContextId * FFX_MAX_RESOURCE_COUNT; currentStaticResourceIndex < effectContext.nextStaticResource; ++currentStaticResourceIndex) {
@@ -2860,6 +2878,10 @@ FfxErrorCode CreateResourceVK(
         copyJob.copyJobDescriptor.size      = 0;
 
         backendInterface->fpScheduleGpuJob(backendInterface, &copyJob);
+        // vkfw patch: run only by this effect's own next dispatch. Any other's could be recorded into a command buffer that
+        // reaches the queue after this effect's first dispatch, whose barriers start from the state the copy leaves
+        // (COPY_DEST) -- the image is still UNDEFINED there (several threads recording, as vkfw's parallel graphs do).
+        backendContext->gpuJobOwners[backendContext->gpuJobCount - 1] = effectContextId + 1;
     }
 
     backendResource->allocationSize = memRequirements.size;
@@ -4129,6 +4151,7 @@ FfxErrorCode ScheduleGpuJobVK(FfxInterface* backendInterface, const FfxGpuJobDes
     FFX_ASSERT(backendContext->gpuJobCount < FFX_MAX_GPU_JOBS);
 
     backendContext->pGpuJobs[backendContext->gpuJobCount] = *job;
+    backendContext->gpuJobOwners[backendContext->gpuJobCount] = 0;  // vkfw patch: any effect's dispatch
     backendContext->gpuJobCount++;
 
     return FFX_OK;
@@ -4631,9 +4654,19 @@ FfxErrorCode ExecuteGpuJobsVK(FfxInterface* backendInterface, FfxCommandList com
     FfxErrorCode errorCode = FFX_OK;
     backendContext->dbBound = false;
 
-    // execute all renderjobs
+    // execute all renderjobs -- vkfw patch: but those another effect owns (gpuJobOwners), which stay queued for it
+    uint32_t keptJobCount = 0;
     for (uint32_t i = 0; i < backendContext->gpuJobCount; ++i)
     {
+        const uint32_t owner = backendContext->gpuJobOwners[i];
+        if (owner != 0 && owner != effectContextId + 1)
+        {
+            backendContext->pGpuJobs[keptJobCount] = backendContext->pGpuJobs[i];
+            backendContext->gpuJobOwners[keptJobCount] = owner;
+            ++keptJobCount;
+            continue;
+        }
+
         FfxGpuJobDescription* gpuJob = &backendContext->pGpuJobs[i];
 
         // If we have a label for the job, drop a marker for it
@@ -4685,7 +4718,7 @@ FfxErrorCode ExecuteGpuJobsVK(FfxInterface* backendInterface, FfxCommandList com
         errorCode == FFX_OK,
         FFX_ERROR_BACKEND_API_ERROR);
 
-    backendContext->gpuJobCount = 0;
+    backendContext->gpuJobCount = keptJobCount;  // vkfw patch: what other effects own, in order
 
     return FFX_OK;
 }
