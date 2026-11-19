@@ -1592,21 +1592,56 @@ void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
     if (probes.w == probes.z || probes.w == probes.y || probes.w == probes.x)
         probes.w = FFX_BRIXELIZER_GI_INVALID_ID;
 
-    for (FfxUInt32 i = 0; i < 4; i++) 
+    // vkfw patch (FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST): the bricks at the pixel's position are its light only if they hold its surface.
+    // Upstream, any brick there replaced the screen probes outright, so a mesh left out of the SDF (an animated mesh, a body that moved) took
+    // the light of the static geometry whose bricks reach it -- a ball resting on the floor lit as the floor -- although the screen probes
+    // spawned on it had gathered its own. With the test, such a pixel keeps its screen probes, and one in between blends the two. Asked here,
+    // before the probes' weights, because it decides how they are weighed (below).
+    FFX_MIN16_F4 brick_sh[9];
+    StoreDebugTarget(tid, FfxFloat32x4(0.0, 0.0, 0.0, 1.0));
+    const FfxBoolean has_world_probe = FfxBrixelizerGIInterpolateBrickSH(world_pos, g_starting_cascade, g_end_cascade, xi, /* inout */ brick_sh);
+    const FfxBoolean surface_test    = (visibility_flags & FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST) != 0u;
+    FfxFloat32       brick_share     = FfxFloat32(1.0);
+    if (has_world_probe && surface_test)
+        brick_share = FfxFloat32(1.0) - FfxBrixelizerGISurfaceMismatch(world_pos, g_starting_cascade, g_end_cascade);
+    // vkfw patch: a pixel lit from its screen probes -- no brick at it, or bricks that are not its surface -- with the surface test on. The
+    // pixels the SDF holds (bricks that are their surface) are weighed and resolved exactly as upstream.
+    const FfxBoolean probes_only = surface_test && (!has_world_probe || brick_share < FfxFloat32(1.0));
+
+    // The weights are the normal and the distance terms to the 8th power over an eps smaller than the probe spacing, so on a curved
+    // surface the SDF does not hold -- a ball left out of it -- a pixel more than about half a spacing from a probe's seed, or turned
+    // from its normal, gets next to nothing from all four. Upstream such a pixel had a brick's SH instead; a probes-only one has only its
+    // probes, and their sum was divided by at least 1e-2 below, which darkened every pixel under it in proportion (the dark blotches on
+    // the diorama's balls), and under 1e-3 wrote 0 and reset its history. So for a probes-only pixel each probe also has a relaxed
+    // weight -- the normal term linear, four times the distance and plane tolerance -- faded in as the strict sum falls below 0.05, so
+    // the weighting does not jump between neighbouring pixels on either side of a threshold.
+    FfxFloat32x4 w_relaxed = FFX_BROADCAST_FLOAT32X4(0.0);
+    for (FfxUInt32 i = 0; i < 4; i++)
     {
-        if (probes[i] != FFX_BRIXELIZER_GI_INVALID_ID) 
+        if (probes[i] != FFX_BRIXELIZER_GI_INVALID_ID)
         {
             FfxUInt32x2    pos                  = FfxUInt32x2(probes[i] & 0xffffu, (probes[i] >> 16u) & 0xffffu);
             FfxUInt32      probe_idx            = pos.x + pos.y * GetTileBufferDimensions().x;
             FfxBrixelizerGIProbeSpawnInfo pinfo                = FfxBrixelizerGIProbeSpawnInfoUnpack(LoadTempProbeInfo(probe_idx));
             FfxFloat32x3   probe_spawn_position = FfxBrixelizerGIProbeSpawnInfoGetSpawnPosition(pinfo);
             FfxFloat32     dist                 = length(probe_spawn_position - world_pos);
+            FfxFloat32     plane                = abs(dot(probe_spawn_position - world_pos, pixel_normal));
+            FfxFloat32     facing               = ffxSaturate(dot(pixel_normal, pinfo.normal));
 
-            if (abs(dot(probe_spawn_position - world_pos, pixel_normal)) > eps_size)
+            if (plane > eps_size)
                 w[i] = FfxFloat32(0.0);
             else
-                w[i] = ffxPow(ffxSaturate(dot(pixel_normal, pinfo.normal)) * ffxSaturate(FfxFloat32(1.0) - dist / eps_size), FfxFloat32(8.0));
+                w[i] = ffxPow(facing * ffxSaturate(FfxFloat32(1.0) - dist / eps_size), FfxFloat32(8.0));
+
+            const FfxFloat32 relaxed_eps = eps_size * FfxFloat32(4.0);
+            if (plane <= relaxed_eps)
+                w_relaxed[i] = facing * ffxSaturate(FfxFloat32(1.0) - dist / relaxed_eps);
         }
+    }
+    if (probes_only)
+    {
+        const FfxFloat32 relax = ffxSaturate(FfxFloat32(1.0) - (w.x + w.y + w.z + w.w) / FfxFloat32(0.05));
+        w = ffxMax(w, w_relaxed * relax);
     }
 
     FfxRay base_ray = FfxBrixelizerGIGenReflectionRay(tid, tid);
@@ -1677,7 +1712,9 @@ void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
         }
     }
 
-    const FfxFloat32 EPS = FfxFloat32(1.0e-2);
+    // vkfw patch: a probes-only pixel is normalised by its weights, not by at least 1e-2, which darkened it (see above); a weight sum
+    // under 1e-3 is no estimate, handled below.
+    const FfxFloat32 EPS = probes_only ? FfxFloat32(1.0e-3) : FfxFloat32(1.0e-2);
     irradiance /= (ffxMax(weight_sum, EPS) * FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0));
 
     if (visibility_enabled)
@@ -1735,18 +1772,13 @@ void FfxBrixelizerGIInterpolateScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
 FfxFloat32 size_weight           = ffxSaturate(eps_size / (GetContextInfo().cascades[0].voxel_size * FfxFloat32(64.0)));
     FfxFloat32 total_sh_cache_weight = ffxSaturate(ffxLerp(FfxFloat32(1.0), FfxFloat32(0.0), size_weight) - ffxSaturate(FfxFloat32(1.0) - dot(pixel_normal, -view)));
 
-    FFX_MIN16_F4 probe_sh[9];
-    StoreDebugTarget(tid, FfxFloat32x4(0.0, 0.0, 0.0, 1.0));
-
-    FfxBoolean has_world_probe = FfxBrixelizerGIInterpolateBrickSH(world_pos, g_starting_cascade, g_end_cascade, xi, /* inout */ probe_sh);
-
-    // vkfw patch (FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST): the bricks at the pixel's position are its light only if they hold its surface.
-    // Upstream, any brick there replaced the screen probes outright, so a mesh left out of the SDF (an animated mesh, a body that moved) took
-    // the light of the static geometry whose bricks reach it -- a ball resting on the floor lit as the floor -- although the screen probes
-    // spawned on it had gathered its own. With the test, such a pixel keeps its screen probes, and one in between blends the two.
-    FfxFloat32 brick_share = FfxFloat32(1.0);
-    if (has_world_probe && (visibility_flags & FFX_BRIXELIZER_GI_VISIBILITY_SURFACE_TEST) != 0u && weight_sum >= FfxFloat32(1.0e-3))
-        brick_share = FfxFloat32(1.0) - FfxBrixelizerGISurfaceMismatch(world_pos, g_starting_cascade, g_end_cascade);
+    // (has_world_probe, brick_sh and brick_share are taken above, before the probes' weights.) Too little from the probes (a weight sum
+    // under 1e-3): where the bricks are mostly the pixel's surface it takes them whole, as before this patch; where they are mostly not,
+    // or there is none, a probes-only pixel has nothing to estimate from this frame and keeps its reprojected history (below) rather than
+    // taking 0 or the bricks of the floor it rests on.
+    const FfxBoolean no_estimate = probes_only && weight_sum < FfxFloat32(1.0e-3) && (!has_world_probe || brick_share < FfxFloat32(0.5));
+    if (weight_sum < FfxFloat32(1.0e-3) && has_world_probe && !no_estimate)
+        brick_share = FfxFloat32(1.0);
 
     if (has_world_probe && brick_share > FfxFloat32(0.0))
     {
@@ -1760,19 +1792,36 @@ FfxFloat32 size_weight           = ffxSaturate(eps_size / (GetContextInfo().casc
 
             for (FfxUInt32 i = 0; i < 9; i++)
             {
-                cur_irradiance += cosine_sh[i] * probe_sh[i].xyz;
-                cur_specular_irradiance += reflection_sh[i] * probe_sh[i].xyz;
+                cur_irradiance += cosine_sh[i] * brick_sh[i].xyz;
+                cur_specular_irradiance += reflection_sh[i] * brick_sh[i].xyz;
             }
 
-            irradiance = ffxLerp(irradiance, cur_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0)), brick_share);
-            specular_irradiance = ffxLerp(specular_irradiance, cur_specular_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0)), brick_share);
+            // A no-estimate pixel keeps its diffuse history (below) but has no probe specular either: the bricks' stands in, as it did
+            // before this patch, rather than the 0 the specular pass would fill a missed trace with.
+            if (!no_estimate)
+                irradiance = ffxLerp(irradiance, cur_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0)), brick_share);
+            specular_irradiance = no_estimate ? cur_specular_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0))
+                                              : ffxLerp(specular_irradiance, cur_specular_irradiance / (FFX_BRIXELIZER_GI_PI * FfxFloat32(2.0)), brick_share);
         }
     }
-    if (!has_world_probe && weight_sum < FfxFloat32(1.0e-3)) 
+    if (no_estimate)
+    {
+        // The reprojected history, which follows the pixel through the motion vectors, with its sample count halved for each frame it is
+        // held: a pixel the probes miss for many frames does not keep a stale value at full confidence, and takes the probes' again
+        // within a few frames of their return. A NaN or an Inf in it starts over.
+        FfxFloat32x4 held = FFX_BROADCAST_FLOAT32X4(0.0);
+#if FFX_BRIXELIZER_GI_OPTION_DISABLE_DENOISER == 0
+        if (!any(isnan(reprojected)) && !any(isinf(reprojected)))
+            held = FfxFloat32x4(ffxMax(reprojected.xyz, FFX_BROADCAST_FLOAT32X3(0.0)), floor(reprojected.w * FfxFloat32(0.5)));
+#endif
+        StoreStaticGITarget(tid, held);
+        StoreDebugTarget(tid, FfxFloat32x4(1.0, 0.0, 0.0, 1.0));
+    }
+    else if (!has_world_probe && weight_sum < FfxFloat32(1.0e-3))
     {
         StoreStaticGITarget(tid, FFX_BROADCAST_FLOAT32X4(0.0));
         StoreDebugTarget(tid, FfxFloat32x4(1.0, 0.0, 0.0, 1.0));
-    } 
+    }
     else 
     {
         irradiance = ffxMax(irradiance, FFX_BROADCAST_FLOAT32X3(0.0));
