@@ -1173,7 +1173,15 @@ void FfxBrixelizerGIProjectScreenProbes(FfxUInt32x2 tid, FfxUInt32x2 gid)
     {
         FfxFloat32x4 irradiance_history = ffxUnpackF32x2(LoadTempProbeSHBuffer(9 * sh_offset + thread_sh_index));
         FfxFloat32x4 irradiance_sh      = ffxUnpackF32x2(lds_probe_sh_buffer[FfxBrixelizerGIGetSHLDSIndex(FfxUInt32x2(0, 0), thread_sh_index)]);
-        
+
+        // vkfw: the reprojected history is a 3x3-weighted, parallax-corrected SH that follows the surface;
+        // blending it into the fresh SH smooths both the 64-ray estimate and the reprojection's per-frame re-binning.
+        {
+            FfxFloat32 hist_sum = irradiance_history.x + irradiance_history.y + irradiance_history.z;
+            if (LoadTempSpawnMask(probe_coord) == 1u && !isnan(hist_sum) && !isinf(hist_sum))
+                irradiance_sh.xyz = ffxLerp(irradiance_history.xyz, irradiance_sh.xyz, FfxFloat32(0.5));
+        }
+
         if (!visibility_enabled)
         {
             irradiance_sh.w = FfxFloat32(1.0);
